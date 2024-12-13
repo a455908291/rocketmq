@@ -56,6 +56,9 @@ public class RemotingCommand {
     private static volatile int configVersion = -1;
     private static AtomicInteger requestId = new AtomicInteger(0);
 
+    /**
+     * 序列化类型
+     */
     private static SerializeType serializeTypeConfigInThisServer = SerializeType.JSON;
 
     static {
@@ -68,18 +71,23 @@ public class RemotingCommand {
             }
         }
     }
-
+    // 请求编号
     private int code;
+    // 编程语言
     private LanguageCode language = LanguageCode.JAVA;
+    // 版本号
     private int version = 0;
+    // 请求id
     private int opaque = requestId.getAndIncrement();
     private int flag = 0;
     private String remark;
+    // 扩展字段
     private HashMap<String, String> extFields;
+    // 自定义的header头
     private transient CommandCustomHeader customHeader;
-
+    // 这一次rpc调用序列化类型
     private SerializeType serializeTypeCurrentRPC = serializeTypeConfigInThisServer;
-
+    // 消息体
     private transient byte[] body;
 
     protected RemotingCommand() {
@@ -211,8 +219,8 @@ public class RemotingCommand {
     public static byte[] markProtocolType(int source, SerializeType type) {
         byte[] result = new byte[4];
 
-        result[0] = type.getCode();
-        result[1] = (byte) ((source >> 16) & 0xFF);
+        result[0] = type.getCode(); // header length 一共4个字节 第一个字节是序列化类型
+        result[1] = (byte) ((source >> 16) & 0xFF); // 第二个字节到第四个字节都是和header length相关的
         result[2] = (byte) ((source >> 8) & 0xFF);
         result[3] = (byte) (source & 0xFF);
         return result;
@@ -370,6 +378,7 @@ public class RemotingCommand {
 
     public void makeCustomHeaderToNet() {
         if (this.customHeader != null) {
+            // 获取自定义header里面的fields
             Field[] fields = getClazzFields(customHeader.getClass());
             if (null == this.extFields) {
                 this.extFields = new HashMap<String, String>();

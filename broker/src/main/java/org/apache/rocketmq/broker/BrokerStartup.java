@@ -48,9 +48,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.apache.rocketmq.remoting.netty.TlsSystemConfig.TLS_ENABLE;
 
 public class BrokerStartup {
+    // 配置数据
     public static Properties properties = null;
+    // 启动参数
     public static CommandLine commandLine = null;
+    // 配置文件
     public static String configFile = null;
+    // 日志
     public static InternalLogger log;
 
     public static void main(String[] args) {
@@ -97,16 +101,19 @@ public class BrokerStartup {
             if (null == commandLine) {
                 System.exit(-1);
             }
-
+            // Broker核心配置
             final BrokerConfig brokerConfig = new BrokerConfig();
+            // Broker是NettyServer 也是NettyClient
             final NettyServerConfig nettyServerConfig = new NettyServerConfig();
             final NettyClientConfig nettyClientConfig = new NettyClientConfig();
 
             nettyClientConfig.setUseTLS(Boolean.parseBoolean(System.getProperty(TLS_ENABLE,
                 String.valueOf(TlsSystemConfig.tlsMode == TlsMode.ENFORCING))));
             nettyServerConfig.setListenPort(10911);
-            final MessageStoreConfig messageStoreConfig = new MessageStoreConfig();
 
+            // 消息存储配置 commitlog, consumequeue, indexfile 跟这些存储机制有关系
+            final MessageStoreConfig messageStoreConfig = new MessageStoreConfig();
+            // 对一个 access message in memory 配置做一个处理
             if (BrokerRole.SLAVE == messageStoreConfig.getBrokerRole()) {
                 int ratio = messageStoreConfig.getAccessMessageInMemoryMaxRatio() - 10;
                 messageStoreConfig.setAccessMessageInMemoryMaxRatio(ratio);
@@ -169,15 +176,19 @@ public class BrokerStartup {
                     break;
             }
 
+            // 如果说启用了dleger数据复制， 代表自动选举主节点， 三个broker组成一个组， 其他的就是从
             if (messageStoreConfig.isEnableDLegerCommitLog()) {
                 brokerConfig.setBrokerId(-1);
             }
-
+            // 高可用监听端口号
             messageStoreConfig.setHaListenPort(nettyServerConfig.getListenPort() + 1);
+            // 日志组件初始化
             LoggerContext lc = (LoggerContext) LoggerFactory.getILoggerFactory();
             JoranConfigurator configurator = new JoranConfigurator();
             configurator.setContext(lc);
             lc.reset();
+
+            // broker日志目录以及日志配置做初始化
             System.setProperty("brokerLogDir", "");
             if (brokerConfig.isIsolateLogEnable()) {
                 System.setProperty("brokerLogDir", brokerConfig.getBrokerName() + "_" + brokerConfig.getBrokerId());
@@ -209,6 +220,7 @@ public class BrokerStartup {
             MixAll.printObjectProperties(log, nettyClientConfig);
             MixAll.printObjectProperties(log, messageStoreConfig);
 
+            // 真正创建brokerController
             final BrokerController controller = new BrokerController(
                 brokerConfig,
                 nettyServerConfig,
@@ -216,13 +228,13 @@ public class BrokerStartup {
                 messageStoreConfig);
             // remember all configs to prevent discard
             controller.getConfiguration().registerConfig(properties);
-
+            // 初始化
             boolean initResult = controller.initialize();
             if (!initResult) {
                 controller.shutdown();
                 System.exit(-3);
             }
-
+            // jvm 关闭钩子
             Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
                 private volatile boolean hasShutdown = false;
                 private AtomicInteger shutdownTimes = new AtomicInteger(0);

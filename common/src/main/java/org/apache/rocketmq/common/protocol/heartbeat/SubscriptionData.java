@@ -28,12 +28,19 @@ import java.util.Set;
 
 public class SubscriptionData implements Comparable<SubscriptionData> {
     public final static String SUB_ALL = "*";
+    // 是否启用类过滤模式
     private boolean classFilterMode = false;
+    // topic主题
     private String topic;
+    // 子字符串
     private String subString;
+    // tags
     private Set<String> tagsSet = new HashSet<String>();
+    // code 表达式列表
     private Set<Integer> codeSet = new HashSet<Integer>();
+    // 版本
     private long subVersion = System.currentTimeMillis();
+    // 表达式类型
     private String expressionType = ExpressionType.TAG;
 
     @JSONField(serialize = false)

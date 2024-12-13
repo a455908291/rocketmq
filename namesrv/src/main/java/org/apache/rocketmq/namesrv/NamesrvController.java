@@ -42,22 +42,47 @@ import org.apache.rocketmq.srvutil.FileWatchService;
 public class NamesrvController {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
 
+    /**
+     * namesct 核心配置
+     */
     private final NamesrvConfig namesrvConfig;
-
+    /**
+     * netty 服务器配置
+     */
     private final NettyServerConfig nettyServerConfig;
-
+    /**
+     * 单线程调度线程池
+     */
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl(
         "NSScheduledThread"));
+    /**
+     * KV配置管理组件
+     */
     private final KVConfigManager kvConfigManager;
+    /**
+     * 路由配置组件
+     */
     private final RouteInfoManager routeInfoManager;
-
+    /**
+     * 远程网络通信服务器， 跟broker、producer、consumer来进行网络通信
+     */
     private RemotingServer remotingServer;
-
+    /**
+     *  对broker进行管理的组件
+     *  namesrv和broker之间的网络事件监听器
+     */
     private BrokerHousekeepingService brokerHousekeepingService;
-
+    /**
+     * 网络通信服务器对请求处理的线程池
+     */
     private ExecutorService remotingExecutor;
-
+    /**
+     * 通用配置组件
+     */
     private Configuration configuration;
+    /**
+     * ssl配置文件监听
+     */
     private FileWatchService fileWatchService;
 
     public NamesrvController(NamesrvConfig namesrvConfig, NettyServerConfig nettyServerConfig) {
@@ -75,15 +100,19 @@ public class NamesrvController {
 
     public boolean initialize() {
 
+        // 加载配置
         this.kvConfigManager.load();
 
+        // 监听端口， 开始作为服务器接收请求
         this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.brokerHousekeepingService);
 
+        // 设置执行器线程池
         this.remotingExecutor =
             Executors.newFixedThreadPool(nettyServerConfig.getServerWorkerThreads(), new ThreadFactoryImpl("RemotingExecutorThread_"));
-
+        // 将执行器线程池给到nettyServer
         this.registerProcessor();
 
+        // 扫描不活跃的broker定时任务
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -91,7 +120,7 @@ public class NamesrvController {
                 NamesrvController.this.routeInfoManager.scanNotActiveBroker();
             }
         }, 5, 10, TimeUnit.SECONDS);
-
+        // 定时打印配置？？？
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -99,7 +128,7 @@ public class NamesrvController {
                 NamesrvController.this.kvConfigManager.printAllPeriodically();
             }
         }, 1, 10, TimeUnit.MINUTES);
-
+        // ssl文件变更监听器
         if (TlsSystemConfig.tlsMode != TlsMode.DISABLED) {
             // Register a listener to reload SslContext
             try {
@@ -147,7 +176,7 @@ public class NamesrvController {
             this.remotingServer.registerDefaultProcessor(new ClusterTestRequestProcessor(this, namesrvConfig.getProductEnvName()),
                 this.remotingExecutor);
         } else {
-
+            // 找到nettyRemotingServer注册一个默认的请求处理组件
             this.remotingServer.registerDefaultProcessor(new DefaultRequestProcessor(this), this.remotingExecutor);
         }
     }

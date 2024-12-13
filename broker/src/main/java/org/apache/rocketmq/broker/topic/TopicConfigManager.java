@@ -40,15 +40,23 @@ import org.apache.rocketmq.common.topic.TopicValidator;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 
+/**
+ * 继承了ConfigManager，会把topic元数据是可以持久化的
+ * @link /Users/xuezhipeng/sourceCodeReading/rocketmq/store/config/topics.json
+ */
 public class TopicConfigManager extends ConfigManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
+    // 锁超时时间
     private static final long LOCK_TIMEOUT_MILLIS = 3000;
+    // 调度队列数量
     private static final int SCHEDULE_TOPIC_QUEUE_NUM = 18;
-
+    // topic元数据重入锁
     private transient final Lock topicConfigTableLock = new ReentrantLock();
 
+    // 核心数据
     private final ConcurrentMap<String, TopicConfig> topicConfigTable =
         new ConcurrentHashMap<String, TopicConfig>(1024);
+    // 数据版本
     private final DataVersion dataVersion = new DataVersion();
     private transient BrokerController brokerController;
 
@@ -57,7 +65,9 @@ public class TopicConfigManager extends ConfigManager {
 
     public TopicConfigManager(BrokerController brokerController) {
         this.brokerController = brokerController;
+        // 搞了一个一个的代码块， 每个代码快中初始化好一些数据, 内置的一些topic
         {
+            // SELF_TEST_TOPIC
             String topic = TopicValidator.RMQ_SYS_SELF_TEST_TOPIC;
             TopicConfig topicConfig = new TopicConfig(topic);
             TopicValidator.addSystemTopic(topic);
@@ -66,6 +76,7 @@ public class TopicConfigManager extends ConfigManager {
             this.topicConfigTable.put(topicConfig.getTopicName(), topicConfig);
         }
         {
+            // 自动创建topic功能 TBW102
             if (this.brokerController.getBrokerConfig().isAutoCreateTopicEnable()) {
                 String topic = TopicValidator.AUTO_CREATE_TOPIC_KEY_TOPIC;
                 TopicConfig topicConfig = new TopicConfig(topic);
@@ -80,6 +91,7 @@ public class TopicConfigManager extends ConfigManager {
             }
         }
         {
+            // BenchmarkTest
             String topic = TopicValidator.RMQ_SYS_BENCHMARK_TOPIC;
             TopicConfig topicConfig = new TopicConfig(topic);
             TopicValidator.addSystemTopic(topic);
@@ -88,7 +100,7 @@ public class TopicConfigManager extends ConfigManager {
             this.topicConfigTable.put(topicConfig.getTopicName(), topicConfig);
         }
         {
-
+            // DefaultCluster
             String topic = this.brokerController.getBrokerConfig().getBrokerClusterName();
             TopicConfig topicConfig = new TopicConfig(topic);
             TopicValidator.addSystemTopic(topic);
@@ -100,7 +112,7 @@ public class TopicConfigManager extends ConfigManager {
             this.topicConfigTable.put(topicConfig.getTopicName(), topicConfig);
         }
         {
-
+            // broker分组也是一个topic
             String topic = this.brokerController.getBrokerConfig().getBrokerName();
             TopicConfig topicConfig = new TopicConfig(topic);
             TopicValidator.addSystemTopic(topic);
@@ -114,6 +126,7 @@ public class TopicConfigManager extends ConfigManager {
             this.topicConfigTable.put(topicConfig.getTopicName(), topicConfig);
         }
         {
+            // offset迁移事件 OFFSET_MOVED_EVENT
             String topic = TopicValidator.RMQ_SYS_OFFSET_MOVED_EVENT;
             TopicConfig topicConfig = new TopicConfig(topic);
             TopicValidator.addSystemTopic(topic);
@@ -122,6 +135,7 @@ public class TopicConfigManager extends ConfigManager {
             this.topicConfigTable.put(topicConfig.getTopicName(), topicConfig);
         }
         {
+            // 定时调度消息topic SCHEDULE_TOPIC_XXXX
             String topic = TopicValidator.RMQ_SYS_SCHEDULE_TOPIC;
             TopicConfig topicConfig = new TopicConfig(topic);
             TopicValidator.addSystemTopic(topic);
@@ -130,6 +144,7 @@ public class TopicConfigManager extends ConfigManager {
             this.topicConfigTable.put(topicConfig.getTopicName(), topicConfig);
         }
         {
+            // 追踪topic？
             if (this.brokerController.getBrokerConfig().isTraceTopicEnable()) {
                 String topic = this.brokerController.getBrokerConfig().getMsgTraceTopicName();
                 TopicConfig topicConfig = new TopicConfig(topic);
@@ -140,6 +155,7 @@ public class TopicConfigManager extends ConfigManager {
             }
         }
         {
+            // broker集群reply消息
             String topic = this.brokerController.getBrokerConfig().getBrokerClusterName() + "_" + MixAll.REPLY_TOPIC_POSTFIX;
             TopicConfig topicConfig = new TopicConfig(topic);
             TopicValidator.addSystemTopic(topic);
@@ -149,10 +165,24 @@ public class TopicConfigManager extends ConfigManager {
         }
     }
 
+    /**
+     * 根据topic名称查询topic元数据
+     * @param topic
+     * @return
+     */
     public TopicConfig selectTopicConfig(final String topic) {
         return this.topicConfigTable.get(topic);
     }
 
+    /**
+     * 在发送消息的方法中创建topic
+     * @param topic topic 名称
+     * @param defaultTopic 默认topic
+     * @param remoteAddress 远程机器的地址
+     * @param clientDefaultTopicQueueNums 默认topic队列数量
+     * @param topicSysFlag 是否是系统topic
+     * @return
+     */
     public TopicConfig createTopicInSendMessageMethod(final String topic, final String defaultTopic,
         final String remoteAddress, final int clientDefaultTopicQueueNums, final int topicSysFlag) {
         TopicConfig topicConfig = null;
@@ -164,15 +194,17 @@ public class TopicConfigManager extends ConfigManager {
                     topicConfig = this.topicConfigTable.get(topic);
                     if (topicConfig != null)
                         return topicConfig;
-
+                    // 获取默认topic元数据
                     TopicConfig defaultTopicConfig = this.topicConfigTable.get(defaultTopic);
                     if (defaultTopicConfig != null) {
+
                         if (defaultTopic.equals(TopicValidator.AUTO_CREATE_TOPIC_KEY_TOPIC)) {
                             if (!this.brokerController.getBrokerConfig().isAutoCreateTopicEnable()) {
+                                // 如果没启用自动创建topic
                                 defaultTopicConfig.setPerm(PermName.PERM_READ | PermName.PERM_WRITE);
                             }
                         }
-
+                        // perm 是否有继承性
                         if (PermName.isInherited(defaultTopicConfig.getPerm())) {
                             topicConfig = new TopicConfig(topic);
 
@@ -207,7 +239,7 @@ public class TopicConfigManager extends ConfigManager {
                         this.dataVersion.nextVersion();
 
                         createNew = true;
-
+                        // 持久化
                         this.persist();
                     }
                 } finally {
@@ -219,12 +251,21 @@ public class TopicConfigManager extends ConfigManager {
         }
 
         if (createNew) {
+            // 重新注册broker信息
             this.brokerController.registerBrokerAll(false, true, true);
         }
 
         return topicConfig;
     }
 
+    /**
+     * 创建topic  不与nameserver交互
+     * @param topic
+     * @param clientDefaultTopicQueueNums
+     * @param perm
+     * @param topicSysFlag
+     * @return
+     */
     public TopicConfig createTopicInSendMessageBackMethod(
         final String topic,
         final int clientDefaultTopicQueueNums,
@@ -269,6 +310,12 @@ public class TopicConfigManager extends ConfigManager {
         return topicConfig;
     }
 
+    /**
+     * 创建一个system topic
+     * @param clientDefaultTopicQueueNums
+     * @param perm
+     * @return
+     */
     public TopicConfig createTopicOfTranCheckMaxTime(final int clientDefaultTopicQueueNums, final int perm) {
         TopicConfig topicConfig = this.topicConfigTable.get(TopicValidator.RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
         if (topicConfig != null)
@@ -309,6 +356,11 @@ public class TopicConfigManager extends ConfigManager {
         return topicConfig;
     }
 
+    /**
+     * 更新topic unit 标识
+     * @param topic topic
+     * @param unit unit
+     */
     public void updateTopicUnitFlag(final String topic, final boolean unit) {
 
         TopicConfig topicConfig = this.topicConfigTable.get(topic);
@@ -354,6 +406,10 @@ public class TopicConfigManager extends ConfigManager {
         }
     }
 
+    /**
+     * 更新topic 元数据
+     * @param topicConfig
+     */
     public void updateTopicConfig(final TopicConfig topicConfig) {
         TopicConfig old = this.topicConfigTable.put(topicConfig.getTopicName(), topicConfig);
         if (old != null) {

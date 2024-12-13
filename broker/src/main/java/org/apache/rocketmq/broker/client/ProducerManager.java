@@ -24,19 +24,28 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.rocketmq.broker.util.PositiveAtomicCounter;
+import org.apache.rocketmq.common.annotation.ImportantZone;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.remoting.common.RemotingHelper;
 import org.apache.rocketmq.remoting.common.RemotingUtil;
 
+/**
+ * 生产者管理组件
+ */
 public class ProducerManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
+    // 网络连接过期超时时间
     private static final long CHANNEL_EXPIRED_TIMEOUT = 1000 * 120;
+    // 获取可用网络连接重试次数
     private static final int GET_AVAILABLE_CHANNEL_RETRY_COUNT = 3;
+    // 生产组 -> 各个网络连接的映射关系
     private final ConcurrentHashMap<String /* group name */, ConcurrentHashMap<Channel, ClientChannelInfo>> groupChannelTable =
         new ConcurrentHashMap<>();
+    // 每个生产者网络客户端id到网络连接的映射关系
     private final ConcurrentHashMap<String, Channel> clientChannelTable = new ConcurrentHashMap<>();
+    // 正数计数器
     private PositiveAtomicCounter positiveAtomicCounter = new PositiveAtomicCounter();
 
     public ProducerManager() {
@@ -46,6 +55,9 @@ public class ProducerManager {
         return groupChannelTable;
     }
 
+    /**
+     * 扫描失活的生产者
+     */
     public void scanNotActiveChannel() {
         for (final Map.Entry<String, ConcurrentHashMap<Channel, ClientChannelInfo>> entry : this.groupChannelTable
                 .entrySet()) {
@@ -71,6 +83,11 @@ public class ProducerManager {
         }
     }
 
+    /**
+     * 处理生产者连接关闭事件
+     * @param remoteAddr
+     * @param channel
+     */
     public synchronized void doChannelCloseEvent(final String remoteAddr, final Channel channel) {
         if (channel != null) {
             for (final Map.Entry<String, ConcurrentHashMap<Channel, ClientChannelInfo>> entry : this.groupChannelTable
@@ -91,6 +108,11 @@ public class ProducerManager {
         }
     }
 
+    /**
+     * 注册生产者
+     * @param group
+     * @param clientChannelInfo
+     */
     public synchronized void registerProducer(final String group, final ClientChannelInfo clientChannelInfo) {
         ClientChannelInfo clientChannelInfoFound = null;
 
@@ -114,6 +136,11 @@ public class ProducerManager {
         }
     }
 
+    /**
+     * 下线
+     * @param group
+     * @param clientChannelInfo
+     */
     public synchronized void unregisterProducer(final String group, final ClientChannelInfo clientChannelInfo) {
         ConcurrentHashMap<Channel, ClientChannelInfo> channelTable = this.groupChannelTable.get(group);
         if (null != channelTable && !channelTable.isEmpty()) {
@@ -131,6 +158,11 @@ public class ProducerManager {
         }
     }
 
+    /**
+     * 根据生产组的id获取可用的网络连接
+     * @param groupId
+     * @return
+     */
     public Channel getAvailableChannel(String groupId) {
         if (groupId == null) {
             return null;
@@ -152,6 +184,8 @@ public class ProducerManager {
 
         Channel lastActiveChannel = null;
 
+        @ImportantZone
+        // round robin轮训算法， 依次获取生产组的每一个生产者连接
         int index = positiveAtomicCounter.incrementAndGet() % size;
         Channel channel = channelList.get(index);
         int count = 0;

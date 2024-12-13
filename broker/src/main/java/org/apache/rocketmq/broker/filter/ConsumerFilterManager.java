@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentMap;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.BrokerPathConfigHelper;
 import org.apache.rocketmq.common.ConfigManager;
+import org.apache.rocketmq.common.annotation.ImportantZone;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
@@ -40,17 +41,24 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Consumer filter data manager.Just manage the consumers use expression filter.
+ * 消费者过滤器管理组件
+ * @link /Users/xuezhipeng/sourceCodeReading/rocketmq/store/config/consumerFilter.json
  */
 public class ConsumerFilterManager extends ConfigManager {
 
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.FILTER_LOGGER_NAME);
 
+    // 24小时常量
     private static final long MS_24_HOUR = 24 * 3600 * 1000;
-
+    // topic -> filters
     private ConcurrentMap<String/*Topic*/, FilterDataMapByTopic>
         filterDataByTopic = new ConcurrentHashMap<String/*Topic*/, FilterDataMapByTopic>(256);
 
     private transient BrokerController brokerController;
+    // 布隆过滤器
+    // bit位数组 写入数据先hash再更正bit位中的01， 查询的时候先对查询数据计算hash再到对应位置找01， 如果是0肯定没有出现过这个数据
+    // 如果是1则有可能出现这个数据（hash冲突）
+    // 可以快速筛查数据
     private transient BloomFilter bloomFilter;
 
     public ConsumerFilterManager() {
@@ -72,8 +80,12 @@ public class ConsumerFilterManager extends ConfigManager {
 
     /**
      * Build consumer filter data.Be care, bloom filter data is not included.
-     *
-     * @return maybe null
+     * @param topic topic
+     * @param consumerGroup 消费组
+     * @param expression 过滤表达式
+     * @param type 过滤类型
+     * @param clientVersion 客户端版本
+     * @returnmaybe null
      */
     public static ConsumerFilterData build(final String topic, final String consumerGroup,
         final String expression, final String type,
@@ -102,6 +114,11 @@ public class ConsumerFilterManager extends ConfigManager {
         return consumerFilterData;
     }
 
+    /**
+     * 注册
+     * @param consumerGroup 消费组
+     * @param subList 订阅列表
+     */
     public void register(final String consumerGroup, final Collection<SubscriptionData> subList) {
         for (SubscriptionData subscriptionData : subList) {
             register(
@@ -135,6 +152,15 @@ public class ConsumerFilterManager extends ConfigManager {
         }
     }
 
+    /**
+     *
+     * @param topic topic
+     * @param consumerGroup 消费组
+     * @param expression 过滤表达式
+     * @param type 类型
+     * @param clientVersion 客户端版本
+     * @return
+     */
     public boolean register(final String topic, final String consumerGroup, final String expression,
         final String type, final long clientVersion) {
         if (ExpressionType.isTagType(type)) {
@@ -153,6 +179,8 @@ public class ConsumerFilterManager extends ConfigManager {
             filterDataMapByTopic = prev != null ? prev : temp;
         }
 
+        // 生成了一个消费组退一个topic的布隆过滤器
+        @ImportantZone
         BloomFilterData bloomFilterData = bloomFilter.generate(consumerGroup + "#" + topic);
 
         return filterDataMapByTopic.register(consumerGroup, expression, type, bloomFilterData, clientVersion);
@@ -321,6 +349,9 @@ public class ConsumerFilterManager extends ConfigManager {
         this.filterDataByTopic = filterDataByTopic;
     }
 
+    /**
+     * 一个topic 针对他订阅的哥哥消费组的过滤数据映射关系
+     */
     public static class FilterDataMapByTopic {
 
         private ConcurrentMap<String/*consumer group*/, ConsumerFilterData>
@@ -353,6 +384,15 @@ public class ConsumerFilterManager extends ConfigManager {
             data.setDeadTime(now);
         }
 
+        /**
+         *
+         * @param consumerGroup 消费组
+         * @param expression 过滤表达式
+         * @param type 类型
+         * @param bloomFilterData 布隆过滤器数据
+         * @param clientVersion 客户端版本号
+         * @return
+         */
         public boolean register(String consumerGroup, String expression, String type, BloomFilterData bloomFilterData,
             long clientVersion) {
             ConsumerFilterData old = this.groupFilterData.get(consumerGroup);
@@ -362,6 +402,7 @@ public class ConsumerFilterManager extends ConfigManager {
                 if (consumerFilterData == null) {
                     return false;
                 }
+                // 设置布隆过滤器
                 consumerFilterData.setBloomFilterData(bloomFilterData);
 
                 old = this.groupFilterData.putIfAbsent(consumerGroup, consumerFilterData);

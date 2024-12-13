@@ -25,18 +25,27 @@ import org.apache.rocketmq.remoting.common.SemaphoreReleaseOnlyOnce;
 import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 
 public class ResponseFuture {
+    // requestId
     private final int opaque;
+    // 请求发送出去的网络连接
     private final Channel processChannel;
+    // 请求等待响应的超时时间
     private final long timeoutMillis;
+    // async rpc调用响应invoke
     private final InvokeCallback invokeCallback;
+    // 请求开始时间戳
     private final long beginTimestamp = System.currentTimeMillis();
+    // 用于进行并发控制的countDownLatch
     private final CountDownLatch countDownLatch = new CountDownLatch(1);
-
+    // 行为控制的一个标识， 仅仅支持释放一次的semaphore的组件的封装
     private final SemaphoreReleaseOnlyOnce once;
-
+    // 支持仅仅执行一次的callback调用的CAS组件
     private final AtomicBoolean executeCallbackOnlyOnce = new AtomicBoolean(false);
+    // 发起的远程调用的请求命令对应的响应
     private volatile RemotingCommand responseCommand;
+    // 这次请求的发送是否成功
     private volatile boolean sendRequestOK = true;
+    // 这次的rpc调用遇到的异常
     private volatile Throwable cause;
 
     public ResponseFuture(Channel channel, int opaque, long timeoutMillis, InvokeCallback invokeCallback,
@@ -48,6 +57,7 @@ public class ResponseFuture {
         this.once = once;
     }
 
+    // 如果响应回来以后， 执行invoke回调
     public void executeInvokeCallback() {
         if (invokeCallback != null) {
             if (this.executeCallbackOnlyOnce.compareAndSet(false, true)) {
@@ -56,22 +66,26 @@ public class ResponseFuture {
         }
     }
 
+    // 释放信号
     public void release() {
         if (this.once != null) {
             this.once.release();
         }
     }
 
+    // 判断当前请求是否超时
     public boolean isTimeout() {
         long diff = System.currentTimeMillis() - this.beginTimestamp;
         return diff > this.timeoutMillis;
     }
 
+    // 等待请求响应
     public RemotingCommand waitResponse(final long timeoutMillis) throws InterruptedException {
         this.countDownLatch.await(timeoutMillis, TimeUnit.MILLISECONDS);
         return this.responseCommand;
     }
 
+    // 处理响应
     public void putResponse(final RemotingCommand responseCommand) {
         this.responseCommand = responseCommand;
         this.countDownLatch.countDown();

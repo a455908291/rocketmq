@@ -33,7 +33,12 @@ public class KVConfigManager {
 
     private final NamesrvController namesrvController;
 
+    /**
+     * 读写锁
+     */
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
+
+
     private final HashMap<String/* Namespace */, HashMap<String/* Key */, String/* Value */>> configTable =
         new HashMap<String, HashMap<String, String>>();
 
@@ -60,6 +65,7 @@ public class KVConfigManager {
 
     public void putKVConfig(final String namespace, final String key, final String value) {
         try {
+            // TODO 锁粒度太高， 可优化为每个namespace一个锁？
             this.lock.writeLock().lockInterruptibly();
             try {
                 HashMap<String, String> kvTable = this.configTable.get(namespace);
@@ -87,6 +93,9 @@ public class KVConfigManager {
         this.persist();
     }
 
+    /**
+     * 持久化
+     */
     public void persist() {
         try {
             this.lock.readLock().lockInterruptibly();

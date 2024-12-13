@@ -14,24 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.rocketmq.common.annotation;
 
-package org.apache.rocketmq.remoting.netty;
+import java.lang.annotation.*;
 
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.mockito.junit.MockitoJUnitRunner;
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.TYPE, ElementType.FIELD, ElementType.METHOD, ElementType.PARAMETER, ElementType.CONSTRUCTOR, ElementType.LOCAL_VARIABLE, ElementType.ANNOTATION_TYPE, ElementType.PACKAGE, ElementType.TYPE_PARAMETER, ElementType.TYPE_USE})
+public @interface ImportantZone {
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-@RunWith(MockitoJUnitRunner.class)
-public class NettyServerConfigTest {
-
-  @Test
-  public void testChangeConfigBySystemProperty() {
-    System.setProperty(NettySystemConfig.COM_ROCKETMQ_REMOTING_SOCKET_BACKLOG, "65535");
-    NettySystemConfig.socketBacklog =
-            Integer.parseInt(System.getProperty(NettySystemConfig.COM_ROCKETMQ_REMOTING_SOCKET_BACKLOG, "1024"));
-    NettyServerConfig changedConfig = new NettyServerConfig();
-    assertThat(changedConfig.getServerSocketBacklog()).isEqualTo(65535);
-  }
+    String desc() default "";
 }

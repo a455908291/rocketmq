@@ -70,60 +70,66 @@ import org.apache.rocketmq.store.index.QueryOffsetResult;
 import org.apache.rocketmq.store.schedule.ScheduleMessageService;
 import org.apache.rocketmq.store.stats.BrokerStatsManager;
 
+/**
+ * 消息存储组件
+ */
 public class DefaultMessageStore implements MessageStore {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
-
+    // 配置
     private final MessageStoreConfig messageStoreConfig;
-    // CommitLog
+    // 核心磁盘数据结构 CommitLog
     private final CommitLog commitLog;
-
+    // 内存数据结构 <topic, <queueId, queue>>
     private final ConcurrentMap<String/* topic */, ConcurrentMap<Integer/* queueId */, ConsumeQueue>> consumeQueueTable;
-
+    // 消费队列数据flush服务
     private final FlushConsumeQueueService flushConsumeQueueService;
-
+    // 清理commitLog服务组件
     private final CleanCommitLogService cleanCommitLogService;
-
+    // 清理 consumeQueue服务组件
     private final CleanConsumeQueueService cleanConsumeQueueService;
-
+    // 消息索引服务组件
     private final IndexService indexService;
-
+    // 已分配的映射文件服务（把磁盘文件数据映射到内存里来， 高性能高并发核心基础）
     private final AllocateMappedFileService allocateMappedFileService;
-
+    // 消息重投递服务
     private final ReputMessageService reputMessageService;
-
+    // HA 服务
     private final HAService haService;
-
+    // 调度消息服务
     private final ScheduleMessageService scheduleMessageService;
-
+    // 存储模块统计服务组件
     private final StoreStatsService storeStatsService;
-
+    // 瞬时存储池子
     private final TransientStorePool transientStorePool;
-
+    // 是否正在运行中的标识
     private final RunningFlags runningFlags = new RunningFlags();
+    // 系统时钟
     private final SystemClock systemClock = new SystemClock();
-
+    // 调度线程池
     private final ScheduledExecutorService scheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl("StoreScheduledThread"));
     private final BrokerStatsManager brokerStatsManager;
+    // 消息到达监听器
     private final MessageArrivingListener messageArrivingListener;
+    // broker配置
     private final BrokerConfig brokerConfig;
-
+    // 是否关闭标识
     private volatile boolean shutdown = true;
-
+    // 存储检查点
     private StoreCheckpoint storeCheckpoint;
-
+    // 打印次数
     private AtomicLong printTimes = new AtomicLong(0);
-
+    // lmq模式下的消费队列数量
     private final AtomicInteger lmqConsumeQueueNum = new AtomicInteger(0);
-
+    // 分发队列
     private final LinkedList<CommitLogDispatcher> dispatcherList;
-
+    // 锁文件（随机访问文件？？）
     private RandomAccessFile lockFile;
-
+    // 文件锁
     private FileLock lock;
-
+    // 是否正常关闭
     boolean shutDownNormal = false;
-
+    // 硬盘检查调度线程池
     private final ScheduledExecutorService diskCheckScheduledExecutorService =
             Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl("DiskCheckScheduledThread"));
 
@@ -133,38 +139,52 @@ public class DefaultMessageStore implements MessageStore {
         this.brokerConfig = brokerConfig;
         this.messageStoreConfig = messageStoreConfig;
         this.brokerStatsManager = brokerStatsManager;
+        // 分配映射文件服务组件
         this.allocateMappedFileService = new AllocateMappedFileService(this);
+        // CommitLog 两种模式
         if (messageStoreConfig.isEnableDLegerCommitLog()) {
+            // DLeger
             this.commitLog = new DLedgerCommitLog(this);
         } else {
+            // 普通commitLog
             this.commitLog = new CommitLog(this);
         }
+        // consumeQueue 映射表
         this.consumeQueueTable = new ConcurrentHashMap<>(32);
 
+        // flush consumeQueue现成
         this.flushConsumeQueueService = new FlushConsumeQueueService();
+        // 清理commitLog线程
         this.cleanCommitLogService = new CleanCommitLogService();
+        // 清理consumeQueue现成
         this.cleanConsumeQueueService = new CleanConsumeQueueService();
+        // 存储统计服务
         this.storeStatsService = new StoreStatsService();
+
+        // 索引服务
         this.indexService = new IndexService(this);
         if (!messageStoreConfig.isEnableDLegerCommitLog()) {
             this.haService = new HAService(this);
         } else {
             this.haService = null;
         }
+        // 重新推送消息服务线程
         this.reputMessageService = new ReputMessageService();
-
+        // 调度延迟消息线程
         this.scheduleMessageService = new ScheduleMessageService(this);
-
+        // 临时缓冲池
         this.transientStorePool = new TransientStorePool(messageStoreConfig);
 
         if (messageStoreConfig.isTransientStorePoolEnable()) {
             this.transientStorePool.init();
         }
-
+        // 文件分配服务
         this.allocateMappedFileService.start();
-
+        // 索引服务
         this.indexService.start();
 
+        // 分发组件有两个， 一个把消息分发到consumeQueue里去， 一个把消息分发到indexFile里去
+        // 消息进来以后先写入commitLog， 完成dledger主从同步， 就可以基于dispatcherList将消息分发到2个区域中
         this.dispatcherList = new LinkedList<>();
         this.dispatcherList.addLast(new CommitLogDispatcherBuildConsumeQueue());
         this.dispatcherList.addLast(new CommitLogDispatcherBuildIndex());
@@ -208,6 +228,7 @@ public class DefaultMessageStore implements MessageStore {
 
                 this.indexService.load(lastExitOK);
 
+                // 对mappedFile读取最新的3个文件， 预热， 把磁盘数据搞到内存中去
                 this.recover(lastExitOK);
 
                 log.info("load over, and the max phy offset = {}", this.getMaxPhyOffset());
@@ -534,6 +555,14 @@ public class DefaultMessageStore implements MessageStore {
         }
     }
 
+    /**
+     * 核心是基于mappedFile来读写数据， 基于os pageCache内存区域来映射一块磁盘文件
+     * 写入/读取都是写到os pageCache里去
+     * 可能会出现一个问题， os pageCache， broker采取了一个机制， 读写分离， 写入到对外缓存里去
+     * transient pool 我们可以往这个里面取写入， 定时触发一个commit 从 transient pool中提交到os pageCache
+     * 读取的时候还是去读取pageCache里， 写入和读取分开来解决一个os pageCache busy
+     * @return
+     */
     @Override
     public boolean isOSPageCacheBusy() {
         long begin = this.getCommitLog().getBeginTimeInLock();
@@ -608,6 +637,7 @@ public class DefaultMessageStore implements MessageStore {
                     nextBeginOffset = nextOffsetCorrection(offset, maxOffset);
                 }
             } else {
+                // 根据偏移量从consumeQueue获取数据
                 SelectMappedBufferResult bufferConsumeQueue = consumeQueue.getIndexBuffer(offset);
                 if (bufferConsumeQueue != null) {
                     try {
@@ -624,6 +654,7 @@ public class DefaultMessageStore implements MessageStore {
 
                         ConsumeQueueExt.CqExtUnit cqExtUnit = new ConsumeQueueExt.CqExtUnit();
                         for (; i < bufferConsumeQueue.getSize() && i < maxFilterMessageCount; i += ConsumeQueue.CQ_STORE_UNIT_SIZE) {
+                            // 对这段consumeQueue里面的数据， 每一条数据都是一个消息
                             long offsetPy = bufferConsumeQueue.getByteBuffer().getLong();
                             int sizePy = bufferConsumeQueue.getByteBuffer().getInt();
                             long tagsCode = bufferConsumeQueue.getByteBuffer().getLong();
@@ -1238,6 +1269,7 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     public ConsumeQueue findConsumeQueue(String topic, int queueId) {
+        // 查找topic 对应的consumeQueue 映射关系
         ConcurrentMap<Integer, ConsumeQueue> map = consumeQueueTable.get(topic);
         if (null == map) {
             ConcurrentMap<Integer, ConsumeQueue> newMap = new ConcurrentHashMap<Integer, ConsumeQueue>(128);
@@ -1249,6 +1281,7 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        // 根据queueId获取对应的consumeQueue
         ConsumeQueue logic = map.get(queueId);
         if (null == logic) {
             ConsumeQueue newLogic = new ConsumeQueue(
@@ -1637,6 +1670,9 @@ public class DefaultMessageStore implements MessageStore {
         }, 6, TimeUnit.SECONDS);
     }
 
+    /**
+     * 消息分发到consumeQueue中
+     */
     class CommitLogDispatcherBuildConsumeQueue implements CommitLogDispatcher {
 
         @Override
@@ -1922,6 +1958,9 @@ public class DefaultMessageStore implements MessageStore {
         }
     }
 
+    /**
+     * flush consumeQueue线程
+     */
     class FlushConsumeQueueService extends ServiceThread {
         private static final int RETRY_TIMES_OVER = 3;
         private long lastFlushTimestamp = 0;
@@ -1935,6 +1974,7 @@ public class DefaultMessageStore implements MessageStore {
 
             long logicsMsgTimestamp = 0;
 
+            // 彻底flush consumeQueue间隔 默认60s
             int flushConsumeQueueThoroughInterval = DefaultMessageStore.this.getMessageStoreConfig().getFlushConsumeQueueThoroughInterval();
             long currentTimeMillis = System.currentTimeMillis();
             if (currentTimeMillis >= (this.lastFlushTimestamp + flushConsumeQueueThoroughInterval)) {

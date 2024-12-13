@@ -33,27 +33,44 @@ import org.apache.rocketmq.store.DefaultMessageStore;
 import org.apache.rocketmq.store.DispatchRequest;
 import org.apache.rocketmq.store.config.StorePathConfigHelper;
 
+/**
+ * 索引服务
+ */
 public class IndexService {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
     /**
      * Maximum times to attempt index file creation.
      */
     private static final int MAX_TRY_IDX_CREATE = 3;
+    // 消息存储组件
     private final DefaultMessageStore defaultMessageStore;
+    // hash槽位数量
     private final int hashSlotNum;
+    // 索引数量
     private final int indexNum;
+    // 存储路径
     private final String storePath;
+    // 索引文件list
     private final ArrayList<IndexFile> indexFileList = new ArrayList<IndexFile>();
+    // 读写锁
     private final ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
 
     public IndexService(final DefaultMessageStore store) {
         this.defaultMessageStore = store;
+        // 默认500w个槽位
         this.hashSlotNum = store.getMessageStoreConfig().getMaxHashSlotNum();
+        // 默认500w * 4 的索引数量
         this.indexNum = store.getMessageStoreConfig().getMaxIndexNum();
+        // 存储路径
         this.storePath =
             StorePathConfigHelper.getStorePathIndex(store.getMessageStoreConfig().getStorePathRootDir());
     }
 
+    /**
+     * 加载索引文件
+     * @param lastExitOK 上一次修改结果
+     * @return
+     */
     public boolean load(final boolean lastExitOK) {
         File dir = new File(this.storePath);
         File[] files = dir.listFiles();
@@ -62,6 +79,7 @@ public class IndexService {
             Arrays.sort(files);
             for (File file : files) {
                 try {
+                    // 把文件封装成indexFile
                     IndexFile f = new IndexFile(file.getPath(), this.hashSlotNum, this.indexNum, 0, 0);
                     f.load();
 
@@ -87,6 +105,10 @@ public class IndexService {
         return true;
     }
 
+    /**
+     * 删除过期索引文件
+     * @param offset
+     */
     public void deleteExpiredFile(long offset) {
         Object[] files = null;
         try {
@@ -154,6 +176,15 @@ public class IndexService {
         }
     }
 
+    /**
+     * 查询
+     * @param topic
+     * @param key
+     * @param maxNum
+     * @param begin
+     * @param end
+     * @return
+     */
     public QueryOffsetResult queryOffset(String topic, String key, int maxNum, long begin, long end) {
         List<Long> phyOffsets = new ArrayList<Long>(maxNum);
 
@@ -198,6 +229,10 @@ public class IndexService {
         return topic + "#" + key;
     }
 
+    /**
+     * 构建index
+     * @param req
+     */
     public void buildIndex(DispatchRequest req) {
         IndexFile indexFile = retryGetAndCreateIndexFile();
         if (indexFile != null) {

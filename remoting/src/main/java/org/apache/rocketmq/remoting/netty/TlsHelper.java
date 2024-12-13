@@ -89,8 +89,11 @@ public class TlsHelper {
     }
 
     public static SslContext buildSslContext(boolean forClient) throws IOException, CertificateException {
+        // 如果说要构建SslContext, 必须去指定的默认目录下面加载tls.properties配置文件
         File configFile = new File(TlsSystemConfig.tlsConfigFile);
+        // 从tls.properties读取配置
         extractTlsConfigFromFile(configFile);
+        // 打印配置项
         logTheFinalUsedTlsConfig();
 
         SslProvider provider;
@@ -103,6 +106,7 @@ public class TlsHelper {
         }
 
         if (forClient) {
+            // netty客户端代码
             if (tlsTestModeEnable) {
                 return SslContextBuilder
                     .forClient()
@@ -128,7 +132,7 @@ public class TlsHelper {
                     .build();
             }
         } else {
-
+            // 服务端代码
             if (tlsTestModeEnable) {
                 SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate();
                 return SslContextBuilder

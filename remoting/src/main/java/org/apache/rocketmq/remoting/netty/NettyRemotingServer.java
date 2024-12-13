@@ -28,7 +28,6 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollServerSocketChannel;
@@ -64,20 +63,47 @@ import org.apache.rocketmq.remoting.exception.RemotingTimeoutException;
 import org.apache.rocketmq.remoting.exception.RemotingTooMuchRequestException;
 import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 
+/**
+ * netty网络通信服务器， NettyRemotingClient(netty网络通信客户端)
+ * server 和 client 的父类都是NettyRemotingAbstract
+ */
 public class NettyRemotingServer extends NettyRemotingAbstract implements RemotingServer {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(RemotingHelper.ROCKETMQ_REMOTING);
+
+    /**
+     * netty server
+     */
     private final ServerBootstrap serverBootstrap;
+    /**
+     * netty server 必须有两个线程池（EventLoopGroup）， 第一个是监听链接， 第二个是处理每个链接读写io请求的
+     *
+     */
     private final EventLoopGroup eventLoopGroupSelector;
     private final EventLoopGroup eventLoopGroupBoss;
+    /**
+     * netty server config
+     */
     private final NettyServerConfig nettyServerConfig;
-
+    /**
+     * 公共线程池
+     */
     private final ExecutorService publicExecutor;
+    /**
+     * 网络连接异常事件监听器
+     */
     private final ChannelEventListener channelEventListener;
-
+    /**
+     * 定时器
+     */
     private final Timer timer = new Timer("ServerHouseKeepingService", true);
+    /**
+     * netty里面的事件处理线程池
+     */
     private DefaultEventExecutorGroup defaultEventExecutorGroup;
 
-
+    /**
+     * netty服务器监听端口
+     */
     private int port = 0;
 
     private static final String HANDSHAKE_HANDLER_NAME = "handshakeHandler";
@@ -96,16 +122,21 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
 
     public NettyRemotingServer(final NettyServerConfig nettyServerConfig,
         final ChannelEventListener channelEventListener) {
+        // remoting server 一个是接受rpc调用请求， 可以通过他发起rpc请求 同步/异步/oneway
+        // oneway semaphore是否是跟我们的netty server oneway调用请求是有关系的
+        // async rpc请求的semaphore对象， 信号量，用来限制remoting server 同时发起的oneway和async rpc的调用数量
         super(nettyServerConfig.getServerOnewaySemaphoreValue(), nettyServerConfig.getServerAsyncSemaphoreValue());
+        // netty server
         this.serverBootstrap = new ServerBootstrap();
         this.nettyServerConfig = nettyServerConfig;
         this.channelEventListener = channelEventListener;
 
+        // 回调处理线程数量
         int publicThreadNums = nettyServerConfig.getServerCallbackExecutorThreads();
         if (publicThreadNums <= 0) {
             publicThreadNums = 4;
         }
-
+        // 构建一个公共的线程池
         this.publicExecutor = Executors.newFixedThreadPool(publicThreadNums, new ThreadFactory() {
             private AtomicInteger threadIndex = new AtomicInteger(0);
 
@@ -116,6 +147,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         });
 
         if (useEpoll()) {
+            // 高阶功能 暂不考虑
             this.eventLoopGroupBoss = new EpollEventLoopGroup(1, new ThreadFactory() {
                 private AtomicInteger threadIndex = new AtomicInteger(0);
 
@@ -135,6 +167,9 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                 }
             });
         } else {
+            // boss 一般是负责连接监听的， 一般来说就一个线程就够了
+            // 就一个线程用一个selector多路复用组件， 监听ServerSocketChannel看是否有人发起连接请求就可以了
+            // 如果说有人发起连接就把物理的网络连接建立好， 然后绑定一系列的handler pipeline
             this.eventLoopGroupBoss = new NioEventLoopGroup(1, new ThreadFactory() {
                 private AtomicInteger threadIndex = new AtomicInteger(0);
 
@@ -143,7 +178,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                     return new Thread(r, String.format("NettyNIOBoss_%d", this.threadIndex.incrementAndGet()));
                 }
             });
-
+            //
             this.eventLoopGroupSelector = new NioEventLoopGroup(nettyServerConfig.getServerSelectorThreads(), new ThreadFactory() {
                 private AtomicInteger threadIndex = new AtomicInteger(0);
                 private int threadTotal = nettyServerConfig.getServerSelectorThreads();
@@ -162,6 +197,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         TlsMode tlsMode = TlsSystemConfig.tlsMode;
         log.info("Server is running in TLS {} mode", tlsMode.getName());
 
+        // 默认情况下，permissive 加密/不加密都可以
         if (tlsMode != TlsMode.DISABLED) {
             try {
                 sslContext = TlsHelper.buildSslContext(false);
@@ -175,13 +211,15 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
     }
 
     private boolean useEpoll() {
-        return RemotingUtil.isLinuxPlatform()
-            && nettyServerConfig.isUseEpollNativeSelector()
-            && Epoll.isAvailable();
+        return RemotingUtil.isLinuxPlatform() // 必须是linux操作系统
+            && nettyServerConfig.isUseEpollNativeSelector() // 默认false
+            && Epoll.isAvailable(); // epoll可用
     }
 
     @Override
     public void start() {
+        // TODO 启动netty服务器， 需要先了解netty知识
+        // 默认事件执行器组？？？
         this.defaultEventExecutorGroup = new DefaultEventExecutorGroup(
             nettyServerConfig.getServerWorkerThreads(),
             new ThreadFactory() {
@@ -193,16 +231,19 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                     return new Thread(r, "NettyServerCodecThread_" + this.threadIndex.incrementAndGet());
                 }
             });
-
+        // 准备消息处理的执行器
         prepareSharableHandlers();
 
+        // 真正创建netty server
         ServerBootstrap childHandler =
             this.serverBootstrap.group(this.eventLoopGroupBoss, this.eventLoopGroupSelector)
                 .channel(useEpoll() ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
-                .option(ChannelOption.SO_BACKLOG, nettyServerConfig.getServerSocketBacklog())
-                .option(ChannelOption.SO_REUSEADDR, true)
-                .option(ChannelOption.SO_KEEPALIVE, false)
-                .childOption(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.SO_BACKLOG, 1024) // tcp三次握手的accept队列长度
+                .option(ChannelOption.SO_REUSEADDR, true) // server socket channel unbind端口监听了以后， 还处于延迟unbind状态，重新启动允许直接监听
+                .option(ChannelOption.SO_KEEPALIVE, false) // 是否自动发送探测包网络连接是否存货
+                .childOption(ChannelOption.TCP_NODELAY, true) // 禁止打包传输， 避免网络通信延迟
+                .childOption(ChannelOption.SO_SNDBUF, nettyServerConfig.getServerSocketSndBufSize()) // 网络服务器收发消息缓冲区大小
+                .childOption(ChannelOption.SO_RCVBUF, nettyServerConfig.getServerSocketRcvBufSize())
                 .localAddress(new InetSocketAddress(this.nettyServerConfig.getListenPort()))
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
@@ -218,37 +259,28 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                             );
                     }
                 });
-        if (nettyServerConfig.getServerSocketSndBufSize() > 0) {
-            log.info("server set SO_SNDBUF to {}", nettyServerConfig.getServerSocketSndBufSize());
-            childHandler.childOption(ChannelOption.SO_SNDBUF, nettyServerConfig.getServerSocketSndBufSize());
-        }
-        if (nettyServerConfig.getServerSocketRcvBufSize() > 0) {
-            log.info("server set SO_RCVBUF to {}", nettyServerConfig.getServerSocketRcvBufSize());
-            childHandler.childOption(ChannelOption.SO_RCVBUF, nettyServerConfig.getServerSocketRcvBufSize());
-        }
-        if (nettyServerConfig.getWriteBufferLowWaterMark() > 0 && nettyServerConfig.getWriteBufferHighWaterMark() > 0) {
-            log.info("server set netty WRITE_BUFFER_WATER_MARK to {},{}",
-                    nettyServerConfig.getWriteBufferLowWaterMark(), nettyServerConfig.getWriteBufferHighWaterMark());
-            childHandler.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(
-                    nettyServerConfig.getWriteBufferLowWaterMark(), nettyServerConfig.getWriteBufferHighWaterMark()));
-        }
 
+        // 是否开启内存池分配机制
         if (nettyServerConfig.isServerPooledByteBufAllocatorEnable()) {
             childHandler.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
         }
 
         try {
+            // 对netty server让他监听指定的端口号， 以及同步等待这个server启动和监听结果
             ChannelFuture sync = this.serverBootstrap.bind().sync();
+            // 获取当前对本地记性端口监听的真正的端口
             InetSocketAddress addr = (InetSocketAddress) sync.channel().localAddress();
             this.port = addr.getPort();
         } catch (InterruptedException e1) {
             throw new RuntimeException("this.serverBootstrap.bind().sync() InterruptedException", e1);
         }
 
+        // netty 网络异常处理器
         if (this.channelEventListener != null) {
             this.nettyEventExecutor.start();
         }
 
+        // 定时扫描ResponseFuture超时
         this.timer.scheduleAtFixedRate(new TimerTask() {
 
             @Override
@@ -326,18 +358,49 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         return processorTable.get(requestCode);
     }
 
+    /**
+     * 发送同步请求
+     * @param channel 链接
+     * @param request 请求
+     * @param timeoutMillis 超时时间
+     * @return
+     * @throws InterruptedException
+     * @throws RemotingSendRequestException
+     * @throws RemotingTimeoutException
+     */
     @Override
     public RemotingCommand invokeSync(final Channel channel, final RemotingCommand request, final long timeoutMillis)
         throws InterruptedException, RemotingSendRequestException, RemotingTimeoutException {
         return this.invokeSyncImpl(channel, request, timeoutMillis);
     }
 
+    /**
+     * 发送异步请求
+     * @param channel 链接
+     * @param request 请求
+     * @param timeoutMillis 超时时间
+     * @param invokeCallback 回调
+     * @throws InterruptedException
+     * @throws RemotingTooMuchRequestException
+     * @throws RemotingTimeoutException
+     * @throws RemotingSendRequestException
+     */
     @Override
     public void invokeAsync(Channel channel, RemotingCommand request, long timeoutMillis, InvokeCallback invokeCallback)
         throws InterruptedException, RemotingTooMuchRequestException, RemotingTimeoutException, RemotingSendRequestException {
         this.invokeAsyncImpl(channel, request, timeoutMillis, invokeCallback);
     }
 
+    /**
+     * 发送oneway请求
+     * @param channel
+     * @param request
+     * @param timeoutMillis
+     * @throws InterruptedException
+     * @throws RemotingTooMuchRequestException
+     * @throws RemotingTimeoutException
+     * @throws RemotingSendRequestException
+     */
     @Override
     public void invokeOneway(Channel channel, RemotingCommand request, long timeoutMillis) throws InterruptedException,
         RemotingTooMuchRequestException, RemotingTimeoutException, RemotingSendRequestException {
@@ -356,17 +419,28 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
     }
 
     private void prepareSharableHandlers() {
+        // 创建好握手用的handler
         handshakeHandler = new HandshakeHandler(TlsSystemConfig.tlsMode);
+        // 创建netty加码器
         encoder = new NettyEncoder();
+        // 创建netty连接管理组件
         connectionManageHandler = new NettyConnectManageHandler();
+        // 创建netty服务器消息处理组件
         serverHandler = new NettyServerHandler();
     }
 
+    /**
+     * 握手处理组件， 处理输入数据， 跟连接建立是没有关系的
+     * 当物理连接建立后， 传输请求数据过来， 数据读取出字节数据， 已经会先经过我手handler
+     * @see io.netty.handler.ssl.SslHandler;  handshake()
+     * @see org.apache.rocketmq.remoting.netty.FileRegionEncoder
+     */
     @ChannelHandler.Sharable
     class HandshakeHandler extends SimpleChannelInboundHandler<ByteBuf> {
 
         private final TlsMode tlsMode;
 
+        // 如果是握手的消息，  第一个字节是和其他消息都不同的
         private static final byte HANDSHAKE_MAGIC_CODE = 0x16;
 
         HandshakeHandler(TlsMode tlsMode) {
@@ -378,19 +452,25 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
 
             // mark the current position so that we can peek the first byte to determine if the content is starting with
             // TLS handshake
+            // 标记reader index
             msg.markReaderIndex();
 
+            // 先读取第一个字节
             byte b = msg.getByte(0);
-
+            // 现根据消息第一个字节判断这个消息是不是握手消息
+            // 对连接建立好了以后 发送过来的第一条消息， 第一个字节去进行tls加密通信的模式判断
+            // 看看第一条消息是不是handshake消息
             if (b == HANDSHAKE_MAGIC_CODE) {
                 switch (tlsMode) {
                     case DISABLED:
+                        // 如果是禁用加密通信， 此时直接把连接关闭掉
                         ctx.close();
                         log.warn("Clients intend to establish an SSL connection while this server is running in SSL disabled mode");
                         break;
                     case PERMISSIVE:
                     case ENFORCING:
                         if (null != sslContext) {
+                            // 如果说这个客户端开启了加密通信，服务端对加密通信为可选/强制，才会对这个客户端加入两个根加密相关的handler
                             ctx.pipeline()
                                 .addAfter(defaultEventExecutorGroup, HANDSHAKE_HANDLER_NAME, TLS_HANDLER_NAME, sslContext.newHandler(ctx.channel().alloc()))
                                 .addAfter(defaultEventExecutorGroup, TLS_HANDLER_NAME, FILE_REGION_ENCODER_NAME, new FileRegionEncoder());
@@ -415,6 +495,9 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
 
             try {
                 // Remove this handler
+                // 从handler链条中把这个handshake删除
+                // 一个连接建立了以后， 这个handler仅仅使用一次就可以了， 就是针对第一个消息的
+                //
                 ctx.pipeline().remove(this);
             } catch (NoSuchElementException e) {
                 log.error("Error while removing HandshakeHandler", e);

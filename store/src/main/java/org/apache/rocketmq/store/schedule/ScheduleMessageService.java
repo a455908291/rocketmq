@@ -33,6 +33,7 @@ import org.apache.rocketmq.common.ConfigManager;
 import org.apache.rocketmq.common.MixAll;
 import org.apache.rocketmq.common.ThreadFactoryImpl;
 import org.apache.rocketmq.common.TopicFilterType;
+import org.apache.rocketmq.common.annotation.ImportantZone;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.common.topic.TopicValidator;
 import org.apache.rocketmq.logging.InternalLogger;
@@ -52,6 +53,9 @@ import org.apache.rocketmq.store.PutMessageStatus;
 import org.apache.rocketmq.store.SelectMappedBufferResult;
 import org.apache.rocketmq.store.config.StorePathConfigHelper;
 
+/**
+ * 延迟消息调度服务组件
+ */
 public class ScheduleMessageService extends ConfigManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
@@ -61,18 +65,28 @@ public class ScheduleMessageService extends ConfigManager {
     private static final long WAIT_FOR_SHUTDOWN = 5000L;
     private static final long DELAY_FOR_A_SLEEP = 10L;
 
+    // 延迟消息支持不同的level级别， level-> delayTime
     private final ConcurrentMap<Integer /* level */, Long/* delay timeMillis */> delayLevelTable =
         new ConcurrentHashMap<Integer, Long>(32);
 
+    // 不同的level级别映射到不同的偏移量
     private final ConcurrentMap<Integer /* level */, Long/* offset */> offsetTable =
         new ConcurrentHashMap<Integer, Long>(32);
+    // 消息组件
     private final DefaultMessageStore defaultMessageStore;
+    // 组件是否启动
     private final AtomicBoolean started = new AtomicBoolean(false);
+    // 调度线程池
     private ScheduledExecutorService deliverExecutorService;
+    // 写消息存储组件
     private MessageStore writeMessageStore;
+    // 最大延迟级别
     private int maxDelayLevel;
+    // 是否启用一步消息投递 默认不启用
     private boolean enableAsyncDeliver = false;
+    // 调度线程池
     private ScheduledExecutorService handleExecutorService;
+    // 不同的延迟级别对应的不同的queue
     private final Map<Integer /* level */, LinkedBlockingQueue<PutResultProcess>> deliverPendingTable =
         new ConcurrentHashMap<>(32);
 
@@ -127,11 +141,14 @@ public class ScheduleMessageService extends ConfigManager {
 
     public void start() {
         if (started.compareAndSet(false, true)) {
+            // 获取配置文件
             super.load();
+            // 调度线程池初始化
             this.deliverExecutorService = new ScheduledThreadPoolExecutor(this.maxDelayLevel, new ThreadFactoryImpl("ScheduleMessageTimerThread_"));
             if (this.enableAsyncDeliver) {
                 this.handleExecutorService = new ScheduledThreadPoolExecutor(this.maxDelayLevel, new ThreadFactoryImpl("ScheduleMessageExecutorHandleThread_"));
             }
+            // 遍历延迟级别映射表
             for (Map.Entry<Integer, Long> entry : this.delayLevelTable.entrySet()) {
                 Integer level = entry.getKey();
                 Long timeDelay = entry.getValue();
@@ -144,10 +161,12 @@ public class ScheduleMessageService extends ConfigManager {
                     if (this.enableAsyncDeliver) {
                         this.handleExecutorService.schedule(new HandlePutResultTask(level), FIRST_DELAY_TIME, TimeUnit.MILLISECONDS);
                     }
+                    // 每个延迟级别都有一个延迟投递任务
                     this.deliverExecutorService.schedule(new DeliverDelayedMessageTimerTask(level, offset), FIRST_DELAY_TIME, TimeUnit.MILLISECONDS);
                 }
             }
 
+            // 定时持久化
             this.deliverExecutorService.scheduleAtFixedRate(new Runnable() {
 
                 @Override
@@ -213,6 +232,10 @@ public class ScheduleMessageService extends ConfigManager {
         return result;
     }
 
+    /**
+     * 纠正延迟偏移量
+     * @return
+     */
     public boolean correctDelayOffset() {
         try {
             for (int delayLevel : delayLevelTable.keySet()) {
@@ -338,8 +361,14 @@ public class ScheduleMessageService extends ConfigManager {
         return msgInner;
     }
 
+    /**
+     * 延迟消息投递核心任务
+     */
+    @ImportantZone(desc = "延迟消息投递核心任务")
     class DeliverDelayedMessageTimerTask implements Runnable {
+        // 延迟级别
         private final int delayLevel;
+        // 当前偏移量
         private final long offset;
 
         public DeliverDelayedMessageTimerTask(int delayLevel, long offset) {
@@ -376,11 +405,16 @@ public class ScheduleMessageService extends ConfigManager {
         }
 
         public void executeOnTimeup() {
+            // 通过消息存储组件根据指定的RMQ_SYS_SCHEDULE_TOPIC查找对应的ConsumeQueue
             ConsumeQueue cq =
                 ScheduleMessageService.this.defaultMessageStore.findConsumeQueue(TopicValidator.RMQ_SYS_SCHEDULE_TOPIC,
                     delayLevel2QueueId(delayLevel));
 
+            // 当投递消息的时候， 追加消息的时候会判断是否为延迟消息， 对应改下topic和queue
+            // 根据延迟级别吧投递到对应系统的topic的一个queue里面去
+            // 每个延迟级别都有一个投递任务，都会定时去获取到你的这个延迟级别对应的queue
             if (cq == null) {
+                // 延迟100ms再重新做一次调度
                 this.scheduleNextTimerTask(this.offset, DELAY_FOR_A_WHILE);
                 return;
             }
@@ -407,6 +441,7 @@ public class ScheduleMessageService extends ConfigManager {
                 int i = 0;
                 ConsumeQueueExt.CqExtUnit cqExtUnit = new ConsumeQueueExt.CqExtUnit();
                 for (; i < bufferCQ.getSize() && isStarted(); i += ConsumeQueue.CQ_STORE_UNIT_SIZE) {
+                    // 投递的消息的物理偏移量、大小 tags
                     long offsetPy = bufferCQ.getByteBuffer().getLong();
                     int sizePy = bufferCQ.getByteBuffer().getInt();
                     long tagsCode = bufferCQ.getByteBuffer().getLong();
@@ -422,7 +457,8 @@ public class ScheduleMessageService extends ConfigManager {
                             tagsCode = computeDeliverTimestamp(delayLevel, msgStoreTime);
                         }
                     }
-
+                    // 计算延迟级别对应的延迟多久来投递这个消息
+                    // 是否达到这个延迟级别对应的时间
                     long now = System.currentTimeMillis();
                     long deliverTimestamp = this.correctDeliverTimestamp(now, tagsCode);
                     nextOffset = offset + (i / ConsumeQueue.CQ_STORE_UNIT_SIZE);
@@ -446,6 +482,7 @@ public class ScheduleMessageService extends ConfigManager {
                     }
 
                     boolean deliverSuc;
+                    // 消息分发
                     if (ScheduleMessageService.this.enableAsyncDeliver) {
                         deliverSuc = this.asyncDeliver(msgInner, msgExt.getMsgId(), offset, offsetPy, sizePy);
                     } else {

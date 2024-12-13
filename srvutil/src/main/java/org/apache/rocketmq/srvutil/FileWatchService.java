@@ -36,10 +36,15 @@ import org.apache.rocketmq.logging.InternalLoggerFactory;
 public class FileWatchService extends ServiceThread {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.COMMON_LOGGER_NAME);
 
+    // 需要观察的文件
     private final List<String> watchFiles;
+    // 当前文件的hash值
     private final List<String> fileCurrentHash;
+    // 文件变动监听器
     private final Listener listener;
+    // 时间间隔
     private static final int WATCH_INTERVAL = 500;
+
     private MessageDigest md = MessageDigest.getInstance("MD5");
 
     public FileWatchService(final String[] watchFiles,

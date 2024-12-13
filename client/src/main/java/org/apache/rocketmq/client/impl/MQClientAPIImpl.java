@@ -168,6 +168,9 @@ import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 import org.apache.rocketmq.remoting.protocol.RemotingSerializable;
 import com.alibaba.fastjson.JSON;
 
+/**
+ * 网络通信API实现组件
+ */
 public class MQClientAPIImpl {
 
     private final static InternalLogger log = ClientLogger.getLog();
@@ -178,10 +181,15 @@ public class MQClientAPIImpl {
         System.setProperty(RemotingCommand.REMOTING_VERSION_KEY, Integer.toString(MQVersion.CURRENT_VERSION));
     }
 
+    // netty远程通信客户端
     private final RemotingClient remotingClient;
+    // 地址
     private final TopAddressing topAddressing;
+    // 客户端远程请求处理组件
     private final ClientRemotingProcessor clientRemotingProcessor;
+    // nameSrv
     private String nameSrvAddr = null;
+    // 客户端配置组件
     private ClientConfig clientConfig;
 
     public MQClientAPIImpl(final NettyClientConfig nettyClientConfig,
@@ -442,6 +450,25 @@ public class MQClientAPIImpl {
         return sendMessage(addr, brokerName, msg, requestHeader, timeoutMillis, communicationMode, null, null, null, 0, context, producer);
     }
 
+    /**
+     * 发送消息
+     * @param addr 机器地址
+     * @param brokerName broker分组
+     * @param msg 消息
+     * @param requestHeader 请求头
+     * @param timeoutMillis 超时时间
+     * @param communicationMode 通信模式
+     * @param sendCallback 回调
+     * @param topicPublishInfo 路由数据
+     * @param instance 客户端实例
+     * @param retryTimesWhenSendFailed 重试次数
+     * @param context 发送消息上下文
+     * @param producer 生产者实例
+     * @return
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public SendResult sendMessage(
         final String addr,
         final String brokerName,
@@ -456,6 +483,7 @@ public class MQClientAPIImpl {
         final SendMessageContext context,
         final DefaultMQProducerImpl producer
     ) throws RemotingException, MQBrokerException, InterruptedException {
+
         long beginStartTime = System.currentTimeMillis();
         RemotingCommand request = null;
         String msgType = msg.getProperty(MessageConst.PROPERTY_MESSAGE_TYPE);

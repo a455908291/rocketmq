@@ -28,11 +28,16 @@ import org.apache.rocketmq.store.CommitLog.MessageExtEncoder;
 
 /**
  * not-thread-safe
+ * 多路分发组件
+ * 可以允许消息分发到多个queue里去， 默认不启用
  */
 public class MultiDispatch {
     private static final InternalLogger LOGGER = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
+    // key构建器
     private final StringBuilder keyBuilder = new StringBuilder();
+    // 消息存储组件
     private final DefaultMessageStore messageStore;
+    // commitLog数据存储组件
     private final CommitLog commitLog;
 
     public MultiDispatch(DefaultMessageStore messageStore, CommitLog commitLog) {
@@ -52,16 +57,25 @@ public class MultiDispatch {
         return keyBuilder.toString();
     }
 
+    /**
+     * 默认未启用
+     * @param msgInner
+     * @return
+     */
     public boolean wrapMultiDispatch(final MessageExtBrokerInner msgInner) {
+        // 默认false
         if (!messageStore.getMessageStoreConfig().isEnableMultiDispatch()) {
             return true;
         }
+        // 从消息属性里提取多路分发queue
         String multiDispatchQueue = msgInner.getProperty(MessageConst.PROPERTY_INNER_MULTI_DISPATCH);
         if (StringUtils.isBlank(multiDispatchQueue)) {
             return true;
         }
+        // 多路分发queues按照分隔符进行切割
         String[] queues = multiDispatchQueue.split(MixAll.MULTI_DISPATCH_QUEUE_SPLITTER);
         Long[] queueOffsets = new Long[queues.length];
+        // 遍历需要多路分发的queue
         for (int i = 0; i < queues.length; i++) {
             String key = queueKey(queues[i], msgInner);
             Long queueOffset;
@@ -80,8 +94,10 @@ public class MultiDispatch {
             }
             queueOffsets[i] = queueOffset;
         }
+        // 把queue偏移量属性设置到消息属性map中
         MessageAccessor.putProperty(msgInner, MessageConst.PROPERTY_INNER_MULTI_QUEUE_OFFSET,
             StringUtils.join(queueOffsets, MixAll.MULTI_DISPATCH_QUEUE_SPLITTER));
+
         removeWaitStorePropertyString(msgInner);
         return rebuildMsgInner(msgInner);
     }

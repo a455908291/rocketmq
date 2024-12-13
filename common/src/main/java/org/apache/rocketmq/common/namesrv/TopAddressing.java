@@ -32,9 +32,9 @@ import org.apache.rocketmq.common.utils.HttpTinyClient;
 public class TopAddressing {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.COMMON_LOGGER_NAME);
 
-    private String nsAddr;
-    private String wsAddr;
-    private String unitName;
+    private String nsAddr; // nameserver 地址
+    private String wsAddr; // ws地址
+    private String unitName; // 单元名称
 
     public TopAddressing(final String wsAddr) {
         this(wsAddr, null);

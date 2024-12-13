@@ -59,11 +59,18 @@ import org.apache.rocketmq.store.schedule.ScheduleMessageService;
 
 /**
  * Store all metadata downtime for recovery, data protection reliability
+ * commitLog的子类， 他可以去继承commitLog把数据写入本地磁盘文件里去， 以及flush这样的功能
+ * 对于数据恢复以及数据保护做一个多副本策略， 实现高可用
  */
 public class DLedgerCommitLog extends CommitLog {
+
+    // 高可用同步服务器
     private final DLedgerServer dLedgerServer;
+    // 配置
     private final DLedgerConfig dLedgerConfig;
+    // 开源dleger框架的mmap内存映射文件存储组件
     private final DLedgerMmapFileStore dLedgerFileStore;
+    // 开源dleger框架的mmap内存映射文件list
     private final MmapFileList dLedgerFileList;
 
     //The id identifies the broker role, 0 means master, others means slave
@@ -82,6 +89,7 @@ public class DLedgerCommitLog extends CommitLog {
     public DLedgerCommitLog(final DefaultMessageStore defaultMessageStore) {
         super(defaultMessageStore);
         dLedgerConfig = new DLedgerConfig();
+
         dLedgerConfig.setEnableDiskForceClean(defaultMessageStore.getMessageStoreConfig().isCleanFileForciblyEnable());
         dLedgerConfig.setStoreType(DLedgerConfig.FILE);
         dLedgerConfig.setSelfId(defaultMessageStore.getMessageStoreConfig().getdLegerSelfId());
@@ -94,9 +102,11 @@ public class DLedgerCommitLog extends CommitLog {
         dLedgerConfig.setPreferredLeaderId(defaultMessageStore.getMessageStoreConfig().getPreferredLeaderId());
         dLedgerConfig.setEnableBatchPush(defaultMessageStore.getMessageStoreConfig().isEnableBatchPush());
 
+
         id = Integer.parseInt(dLedgerConfig.getSelfId().substring(1)) + 1;
         dLedgerServer = new DLedgerServer(dLedgerConfig);
         dLedgerFileStore = (DLedgerMmapFileStore) dLedgerServer.getdLedgerStore();
+        // 添加append钩子
         DLedgerMmapFileStore.AppendHook appendHook = (entry, buffer, bodyOffset) -> {
             assert bodyOffset == DLedgerEntry.BODY_OFFSET;
             buffer.position(buffer.position() + bodyOffset + MessageDecoder.PHY_POS_POSITION);
@@ -113,6 +123,9 @@ public class DLedgerCommitLog extends CommitLog {
         return super.load();
     }
 
+    /**
+     * 刷新缓存
+     */
     private void refreshConfig() {
         dLedgerConfig.setEnableDiskForceClean(defaultMessageStore.getMessageStoreConfig().isCleanFileForciblyEnable());
         dLedgerConfig.setDeleteWhen(defaultMessageStore.getMessageStoreConfig().getDeleteWhen());
@@ -136,6 +149,7 @@ public class DLedgerCommitLog extends CommitLog {
 
     @Override
     public long flush() {
+        // 刷新数据和索引
         dLedgerFileStore.flush();
         return dLedgerFileList.getFlushedWhere();
     }
@@ -443,6 +457,7 @@ public class DLedgerCommitLog extends CommitLog {
             request.setGroup(dLedgerConfig.getGroup());
             request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
             request.setBody(encodeResult.getData());
+            // 追加数据
             dledgerFuture = (AppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
             if (dledgerFuture.getPos() == -1) {
                 return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR)));

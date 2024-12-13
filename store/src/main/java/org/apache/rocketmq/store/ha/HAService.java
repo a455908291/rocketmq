@@ -41,22 +41,27 @@ import org.apache.rocketmq.store.DefaultMessageStore;
 import org.apache.rocketmq.store.PutMessageSpinLock;
 import org.apache.rocketmq.store.PutMessageStatus;
 
+/**
+ * 主从同步服务组件
+ */
 public class HAService {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
+    // 链接数量
     private final AtomicInteger connectionCount = new AtomicInteger(0);
-
+    // 主从建立的网络连接， 以为一个master可能有多个slave
     private final List<HAConnection> connectionList = new LinkedList<>();
-
+    // 接受slave的socket服务
     private final AcceptSocketService acceptSocketService;
-
+    // 所属的消息存储组件
     private final DefaultMessageStore defaultMessageStore;
-
+    // 等待通知对象
     private final WaitNotifyObject waitNotifyObject = new WaitNotifyObject();
+    // 最大偏移量
     private final AtomicLong push2SlaveMaxOffset = new AtomicLong(0);
-
+    // 组传输服务
     private final GroupTransferService groupTransferService;
-
+    // 主从同步客户端组件
     private final HAClient haClient;
 
     public HAService(final DefaultMessageStore defaultMessageStore) throws IOException {
@@ -67,6 +72,10 @@ public class HAService {
         this.haClient = new HAClient();
     }
 
+    /**
+     * 更新master节点地址
+     * @param newAddr 新地址
+     */
     public void updateMasterAddress(final String newAddr) {
         if (this.haClient != null) {
             this.haClient.updateMasterAddress(newAddr);
@@ -158,8 +167,11 @@ public class HAService {
      * Listens to slave connections to create {@link HAConnection}.
      */
     class AcceptSocketService extends ServiceThread {
+        // 监听端口地址
         private final SocketAddress socketAddressListen;
+        // nio里面的网络监听服务器
         private ServerSocketChannel serverSocketChannel;
+        // 多路复用监听组件
         private Selector selector;
 
         public AcceptSocketService(final int port) {
@@ -172,11 +184,17 @@ public class HAService {
          * @throws Exception If fails.
          */
         public void beginAccept() throws Exception {
+            // 打开nio网络监听器
             this.serverSocketChannel = ServerSocketChannel.open();
+            // 打开selector多路复用组件
             this.selector = RemotingUtil.openSelector();
+            // 设置socket重用地址为true
             this.serverSocketChannel.socket().setReuseAddress(true);
+            // 设置监听端口号
             this.serverSocketChannel.socket().bind(this.socketAddressListen);
+            // 配置nio阻塞模式 false
             this.serverSocketChannel.configureBlocking(false);
+            // 把nio网络监听服务器注册到selector多路复用组件里去
             this.serverSocketChannel.register(this.selector, SelectionKey.OP_ACCEPT);
         }
 
@@ -203,12 +221,15 @@ public class HAService {
 
             while (!this.isStopped()) {
                 try {
+                    //  通过selector多路复用组件监听nio网络服务器是否有连接事件到达
                     this.selector.select(1000);
                     Set<SelectionKey> selected = this.selector.selectedKeys();
 
                     if (selected != null) {
+                        // 有连接事件
                         for (SelectionKey k : selected) {
                             if ((k.readyOps() & SelectionKey.OP_ACCEPT) != 0) {
+                                // 完成tcp链接， 获取到一个新的链接
                                 SocketChannel sc = ((ServerSocketChannel) k.channel()).accept();
 
                                 if (sc != null) {
@@ -216,7 +237,9 @@ public class HAService {
                                         + sc.socket().getRemoteSocketAddress());
 
                                     try {
+                                        // 封装
                                         HAConnection conn = new HAConnection(HAService.this, sc);
+                                        // 启动
                                         conn.start();
                                         HAService.this.addConnection(conn);
                                     } catch (Exception e) {
@@ -228,7 +251,7 @@ public class HAService {
                                 log.warn("Unexpected ops in select " + k.readyOps());
                             }
                         }
-
+                        // clear
                         selected.clear();
                     }
                 } catch (Exception e) {
@@ -326,17 +349,27 @@ public class HAService {
         }
     }
 
+    // 从节点会用这个线程与主节点建立连接， 执行数据读写
     class HAClient extends ServiceThread {
+        // 读数据缓冲区大小 4m
         private static final int READ_MAX_BUFFER_SIZE = 1024 * 1024 * 4;
+        // master 地址
         private final AtomicReference<String> masterAddress = new AtomicReference<>();
+        // 从节点收到数据后会返回一个8字节的ack偏移量
         private final ByteBuffer reportOffset = ByteBuffer.allocate(8);
+        // nio网络连接
         private SocketChannel socketChannel;
+        // 多路复用组件
         private Selector selector;
+        // 最近一次写数据时间戳
         private long lastWriteTimestamp = System.currentTimeMillis();
-
+        // 当前已经上报的偏移量
         private long currentReportedOffset = 0;
+        // 分发位置
         private int dispatchPosition = 0;
+        // 读数据缓冲区
         private ByteBuffer byteBufferRead = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
+        // 备份数据缓冲区
         private ByteBuffer byteBufferBackup = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
 
         public HAClient() throws IOException {
@@ -351,6 +384,7 @@ public class HAService {
             }
         }
 
+        // 是否到了上报ack偏移量时间
         private boolean isTimeToReportOffset() {
             long interval =
                 HAService.this.defaultMessageStore.getSystemClock().now() - this.lastWriteTimestamp;
@@ -494,6 +528,11 @@ public class HAService {
             return result;
         }
 
+        /**
+         * 从节点刚开始就尝试连接master
+         * @return
+         * @throws ClosedChannelException
+         */
         private boolean connectMaster() throws ClosedChannelException {
             if (null == socketChannel) {
                 String addr = this.masterAddress.get();

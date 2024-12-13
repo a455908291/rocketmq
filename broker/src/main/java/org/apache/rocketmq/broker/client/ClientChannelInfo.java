@@ -21,9 +21,13 @@ import org.apache.rocketmq.remoting.protocol.LanguageCode;
 
 public class ClientChannelInfo {
     private final Channel channel;
+    // 客户端id
     private final String clientId;
+    // 消费者编程语言
     private final LanguageCode language;
+    // 版本
     private final int version;
+    // 最新更新时间
     private volatile long lastUpdateTimestamp = System.currentTimeMillis();
 
     public ClientChannelInfo(Channel channel) {

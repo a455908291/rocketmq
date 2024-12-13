@@ -51,6 +51,15 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentMap;
 
+/**
+ * broker和客户端网络通信组件
+ * broker主动向client发送消息的组件
+ * 1、检查生产者事务状态
+ * 2、通知消费者ids变化
+ * 3、消费者复位偏移量
+ * 4、查询消费状态
+ * 5、发送自定义请求
+ */
 public class Broker2Client {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private final BrokerController brokerController;
@@ -59,6 +68,20 @@ public class Broker2Client {
         this.brokerController = brokerController;
     }
 
+    /**
+     * 检查生产者事务状态
+     * 如果生产者发送的是事务消息， 此时先发送half消息， 如果成功了， 此时才会走commit操作， 否则rollback
+     * 如果连接中断， broker会自己检查事务消息的状态， 以及回调生产者客户端检查本地事务状态
+     * 通过broker主动回查一级检查， 确保去推进commit或者是rollback
+     *
+     *
+     * 发现有half消息超过一定时间还没有提交/回滚， 则会主动推送消息到生产者去查询本地事务状态
+     * @param group 生产者组
+     * @param channel channel
+     * @param requestHeader 请求头
+     * @param messageExt 消息扩展数据
+     * @throws Exception
+     */
     public void checkProducerTransactionState(
         final String group,
         final Channel channel,
@@ -81,6 +104,7 @@ public class Broker2Client {
         return this.brokerController.getRemotingServer().invokeSync(channel, request, 10000);
     }
 
+    // consumer消费组ids变动
     public void notifyConsumerIdsChanged(
         final Channel channel,
         final String consumerGroup) {
@@ -105,8 +129,18 @@ public class Broker2Client {
         return resetOffset(topic, group, timeStamp, isForce, false);
     }
 
+    /**
+     * 主动推送重置偏移量
+     * @param topic topic
+     * @param group 消费组
+     * @param timeStamp 时间戳
+     * @param isForce 是否强制
+     * @param isC 是否是c++语言
+     * @return
+     */
     public RemotingCommand resetOffset(String topic, String group, long timeStamp, boolean isForce,
                                        boolean isC) {
+        //
         final RemotingCommand response = RemotingCommand.createResponseCommand(null);
 
         TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(topic);
@@ -119,12 +153,15 @@ public class Broker2Client {
 
         Map<MessageQueue, Long> offsetTable = new HashMap<MessageQueue, Long>();
 
+        // 遍历topic在这个broker里面的每一个write queue
         for (int i = 0; i < topicConfig.getWriteQueueNums(); i++) {
+            // 消息队列
             MessageQueue mq = new MessageQueue();
             mq.setBrokerName(this.brokerController.getBrokerConfig().getBrokerName());
             mq.setTopic(topic);
             mq.setQueueId(i);
 
+            // 查询消费组对这个topic的偏移量
             long consumerOffset =
                 this.brokerController.getConsumerOffsetManager().queryOffset(group, topic, i);
             if (-1 == consumerOffset) {
@@ -132,7 +169,7 @@ public class Broker2Client {
                 response.setRemark(String.format("THe consumer group <%s> not exist", group));
                 return response;
             }
-
+            // 时间戳偏移量 or 最大偏移量
             long timeStampOffset;
             if (timeStamp == -1) {
 
@@ -146,6 +183,7 @@ public class Broker2Client {
                 timeStampOffset = 0;
             }
 
+            // 是否强制启用 or 时间戳偏移量小于消费偏移量
             if (isForce || timeStampOffset < consumerOffset) {
                 offsetTable.put(mq, timeStampOffset);
             } else {
@@ -182,6 +220,7 @@ public class Broker2Client {
                 int version = entry.getValue().getVersion();
                 if (version >= MQVersion.Version.V3_0_7_SNAPSHOT.ordinal()) {
                     try {
+                        // 对消费组里面的每一个消费者推送一个复位偏移量请求
                         this.brokerController.getRemotingServer().invokeOneway(entry.getKey(), request, 5000);
                         log.info("[reset-offset] reset offset success. topic={}, group={}, clientId={}",
                             topic, group, entry.getValue().getClientId());
@@ -227,6 +266,13 @@ public class Broker2Client {
         return list;
     }
 
+    /**
+     * 针对某个消费者查询消费状态
+     * @param topic topic
+     * @param group 组
+     * @param originClientId 远程客户端id
+     * @return
+     */
     public RemotingCommand getConsumeStatus(String topic, String group, String originClientId) {
         final RemotingCommand result = RemotingCommand.createResponseCommand(null);
 
@@ -236,7 +282,7 @@ public class Broker2Client {
         RemotingCommand request =
             RemotingCommand.createRequestCommand(RequestCode.GET_CONSUMER_STATUS_FROM_CLIENT,
                 requestHeader);
-
+        // clientId(consumerId) -< map
         Map<String, Map<MessageQueue, Long>> consumerStatusTable =
             new HashMap<String, Map<MessageQueue, Long>>();
         ConcurrentMap<Channel, ClientChannelInfo> channelInfoTable =
@@ -259,6 +305,7 @@ public class Broker2Client {
                 return result;
             } else if (UtilAll.isBlank(originClientId) || originClientId.equals(clientId)) {
                 try {
+                    // 同步发送请求获取消费状态 超时5s
                     RemotingCommand response =
                         this.brokerController.getRemotingServer().invokeSync(entry.getKey(), request, 5000);
                     assert response != null;

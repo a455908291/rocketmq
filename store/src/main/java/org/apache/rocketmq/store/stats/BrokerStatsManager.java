@@ -27,6 +27,9 @@ import org.apache.rocketmq.common.stats.MomentStatsItemSet;
 import org.apache.rocketmq.common.stats.StatsItem;
 import org.apache.rocketmq.common.stats.StatsItemSet;
 
+/**
+ * broker 统计组件
+ */
 public class BrokerStatsManager {
 
     public static final String QUEUE_PUT_NUMS = "QUEUE_PUT_NUMS";
@@ -66,13 +69,19 @@ public class BrokerStatsManager {
      */
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.ROCKETMQ_STATS_LOGGER_NAME);
     private static final InternalLogger COMMERCIAL_LOG = InternalLoggerFactory.getLogger(LoggerName.COMMERCIAL_LOGGER_NAME);
+    // 指标统计任务的调度线程池
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl(
         "BrokerStatsThread"));
+    // 商业版本指标统计任务调度线程池
     private final ScheduledExecutorService commercialExecutor = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl(
         "CommercialStatsThread"));
+    // 统计数据table
     private final HashMap<String, StatsItemSet> statsTable = new HashMap<String, StatsItemSet>();
+    // 集群名称
     private final String clusterName;
+    // 是否启用队列统计
     private final boolean enableQueueStat;
+    // 指标统计条目集合
     private final MomentStatsItemSet momentStatsItemSetFallSize = new MomentStatsItemSet(GROUP_GET_FALL_SIZE, scheduledExecutorService, log);
     private final MomentStatsItemSet momentStatsItemSetFallTime = new MomentStatsItemSet(GROUP_GET_FALL_TIME, scheduledExecutorService, log);
 
@@ -81,14 +90,22 @@ public class BrokerStatsManager {
         this.enableQueueStat = enableQueueStat;
 
         if (enableQueueStat) {
+            // 队列put数量
             this.statsTable.put(QUEUE_PUT_NUMS, new StatsItemSet(QUEUE_PUT_NUMS, this.scheduledExecutorService, log));
+            // 队列put大小
             this.statsTable.put(QUEUE_PUT_SIZE, new StatsItemSet(QUEUE_PUT_SIZE, this.scheduledExecutorService, log));
+            // 队列get数量
             this.statsTable.put(QUEUE_GET_NUMS, new StatsItemSet(QUEUE_GET_NUMS, this.scheduledExecutorService, log));
+            // 队列get数据量大小
             this.statsTable.put(QUEUE_GET_SIZE, new StatsItemSet(QUEUE_GET_SIZE, this.scheduledExecutorService, log));
         }
+        // topic put 数量
         this.statsTable.put(TOPIC_PUT_NUMS, new StatsItemSet(TOPIC_PUT_NUMS, this.scheduledExecutorService, log));
+        // topic put 数据量
         this.statsTable.put(TOPIC_PUT_SIZE, new StatsItemSet(TOPIC_PUT_SIZE, this.scheduledExecutorService, log));
+        // 消费组 get数量
         this.statsTable.put(GROUP_GET_NUMS, new StatsItemSet(GROUP_GET_NUMS, this.scheduledExecutorService, log));
+        //
         this.statsTable.put(GROUP_GET_SIZE, new StatsItemSet(GROUP_GET_SIZE, this.scheduledExecutorService, log));
         this.statsTable.put(GROUP_GET_LATENCY, new StatsItemSet(GROUP_GET_LATENCY, this.scheduledExecutorService, log));
         this.statsTable.put(SNDBCK_PUT_NUMS, new StatsItemSet(SNDBCK_PUT_NUMS, this.scheduledExecutorService, log));
@@ -133,6 +150,7 @@ public class BrokerStatsManager {
         return null;
     }
 
+    // 接受一些时间回调
     public void onTopicDeleted(final String topic) {
         this.statsTable.get(TOPIC_PUT_NUMS).delValue(topic);
         this.statsTable.get(TOPIC_PUT_SIZE).delValue(topic);

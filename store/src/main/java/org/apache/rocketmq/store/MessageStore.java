@@ -33,20 +33,21 @@ public interface MessageStore {
 
     /**
      * Load previously stored messages.
-     *
+     * 加载之前存储的消息数据
      * @return true if success; false otherwise.
      */
     boolean load();
 
     /**
      * Launch this message store.
-     *
+     *  启动这个消息存储组件
      * @throws Exception if there is any error.
      */
     void start() throws Exception;
 
     /**
      * Shutdown this message store.
+     * 关闭
      */
     void shutdown();
 
@@ -58,6 +59,8 @@ public interface MessageStore {
     /** Store a message into store in async manner, the processor can process the next request
      *  rather than wait for result
      *  when result is completed, notify the client in async manner
+     *
+     * 异步写入消息
      *
      * @param msg MessageInstance to store
      * @return a CompletableFuture for the result of store operation
@@ -77,7 +80,7 @@ public interface MessageStore {
 
     /**
      * Store a message into store.
-     *
+     * 同步写入消息
      * @param msg Message instance to store
      * @return result of store operation.
      */
@@ -127,6 +130,8 @@ public interface MessageStore {
     /**
      * Get the offset of the message in the commit log, which is also known as physical offset.
      *
+     * 针对topic->queue指定的offset偏移量位置读取一条消息的物理偏移量， 这条消息在commitlog里面的实际偏移量
+     *
      * @param topic Topic of the message to lookup.
      * @param queueId Queue ID.
      * @param consumeQueueOffset offset of consume queue.
@@ -136,6 +141,7 @@ public interface MessageStore {
 
     /**
      * Look up the physical offset of the message whose store timestamp is as specified.
+     * 查询指定时间戳的物理偏移量
      *
      * @param topic Topic of the message.
      * @param queueId Queue ID.
@@ -146,7 +152,7 @@ public interface MessageStore {
 
     /**
      * Look up the message by given commit log offset.
-     *
+     * 根据commit log的偏移量查询实际的一条消息
      * @param commitLogOffset physical offset.
      * @return Message whose physical offset is as specified.
      */
@@ -242,7 +248,7 @@ public interface MessageStore {
 
     /**
      * Append data to commit log.
-     *
+     * 添加数据到commit log
      * @param startOffset starting offset.
      * @param data data to append.
      * @param dataStart the start index of data array
@@ -253,12 +259,13 @@ public interface MessageStore {
 
     /**
      * Execute file deletion manually.
+     * 手动删除文件
      */
     void executeDeleteFilesManually();
 
     /**
      * Query messages by given key.
-     *
+     * 查询消息
      * @param topic topic of the message.
      * @param key message key.
      * @param maxNum maximum number of the messages possible.
@@ -270,14 +277,14 @@ public interface MessageStore {
 
     /**
      * Update HA master address.
-     *
+     * 更新高可用服务器地址
      * @param newAddr new address.
      */
     void updateHaMasterAddress(final String newAddr);
 
     /**
      * Return how much the slave falls behind.
-     *
+     * 查询从节点距离主节点落后了多少条数据
      * @return number of bytes that slave falls behind.
      */
     long slaveFallBehindMuch();
@@ -304,7 +311,7 @@ public interface MessageStore {
 
     /**
      * Check if the given message has been swapped out of the memory.
-     *
+     * 看下topic -> queue 中的offset对应的消息是否已经存储到磁盘
      * @param topic topic.
      * @param queueId queue ID.
      * @param consumeOffset consume queue offset.
@@ -314,21 +321,21 @@ public interface MessageStore {
 
     /**
      * Get number of the bytes that have been stored in commit log and not yet dispatched to consume queue.
-     *
+     * 查询已经入到commit log并且还没有被分发到consume queue里面的数据量
      * @return number of the bytes to dispatch.
      */
     long dispatchBehindBytes();
 
     /**
      * Flush the message store to persist all data.
-     *
+     * 持久化全部数据
      * @return maximum offset flushed to persistent storage device.
      */
     long flush();
 
     /**
      * Reset written offset.
-     *
+     * 复位偏移量
      * @param phyOffset new offset.
      * @return true if success; false otherwise.
      */
@@ -336,7 +343,7 @@ public interface MessageStore {
 
     /**
      * Get confirm offset.
-     *
+     * 获取确认偏移量
      * @return confirm offset.
      */
     long getConfirmOffset();
@@ -350,7 +357,7 @@ public interface MessageStore {
 
     /**
      * Check if the operation system page cache is busy or not.
-     *
+     * 当前os pageCache 是否繁忙
      * @return true if the OS page cache is busy; false otherwise.
      */
     boolean isOSPageCacheBusy();
@@ -364,21 +371,21 @@ public interface MessageStore {
 
     /**
      * Check if the transient store pool is deficient.
-     *
+     * 查看当前的存储池子是否已经不可用
      * @return true if the transient store pool is running out; false otherwise.
      */
     boolean isTransientStorePoolDeficient();
 
     /**
      * Get the dispatcher list.
-     *
+     * 获取分发列表
      * @return list of the dispatcher.
      */
     LinkedList<CommitLogDispatcher> getDispatcherList();
 
     /**
      * Get consume queue of the topic/queue.
-     *
+     * 获取消费队列
      * @param topic Topic.
      * @param queueId Queue ID.
      * @return Consume queue.
@@ -387,13 +394,14 @@ public interface MessageStore {
 
     /**
      * Get BrokerStatsManager of the messageStore.
-     *
+     * 获取关联的统计组件
      * @return BrokerStatsManager.
      */
     BrokerStatsManager getBrokerStatsManager();
 
     /**
      * handle
+     * 处理调度消息服务
      * @param brokerRole
      */
     void handleScheduleMessageService(BrokerRole brokerRole);

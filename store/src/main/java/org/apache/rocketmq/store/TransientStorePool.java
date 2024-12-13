@@ -47,6 +47,7 @@ public class TransientStorePool {
      * It's a heavy init method.
      */
     public void init() {
+        // 默认会搞5个写入缓冲区， 缓冲区大小就是一个CommitLog的大小， 就是1GB
         for (int i = 0; i < poolSize; i++) {
             ByteBuffer byteBuffer = ByteBuffer.allocateDirect(fileSize);
 

@@ -17,15 +17,11 @@
 package org.apache.rocketmq.namesrv.routeinfo;
 
 import io.netty.channel.Channel;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
+
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.apache.rocketmq.common.DataVersion;
@@ -48,14 +44,43 @@ import org.apache.rocketmq.remoting.common.RemotingUtil;
 
 public class RouteInfoManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
+    /**
+     *  broker 网络场链接过期时间， 空闲时间过期时间是2分钟
+     */
     private final static long BROKER_CHANNEL_EXPIRED_TIME = 1000 * 60 * 2;
+    /**
+     * 读写锁
+     */
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    /**
+     * topic 数据， 每个topic有多个queue， 分布在不同的broker上
+     */
     private final HashMap<String/* topic */, List<QueueData>> topicQueueTable;
+    /**
+     * 一个brokerName代表一组broker
+     */
     private final HashMap<String/* brokerName */, BrokerData> brokerAddrTable;
+    /**
+     * 一个nameSrv是可以管理多个broker cluster， 一般来说一个cluster就够了
+     */
     private final HashMap<String/* clusterName */, Set<String/* brokerName */>> clusterAddrTable;
+    /**
+     * 用于管理broker之间的长链接、是否有心跳、保活
+     */
     private final HashMap<String/* brokerAddr */, BrokerLiveInfo> brokerLiveTable;
+    /**
+     * rocketmq 高阶功能， 可以基于tag来进行数据筛选，比较简单， 没办法支持更加复杂细粒度的数据筛选
+     * 支持一个高阶功能， filter server， 在每台机器上是可以启动一个filter server
+     * 启动欧会根据本地的broker来进行长链接构建， 注册，以及心跳和保活
+     * 自定义的消息筛选的class， 一个类， 上传到filter server 里去， 消费数据的时候，
+     * 让broker把数据先传输到本地机器的filter server里去， fs基于你自定义的class来进行细粒度的数据筛选，
+     * 把精细筛选后的数据再回传给你的消费端
+     */
     private final HashMap<String/* brokerAddr */, List<String>/* Filter Server */> filterServerTable;
 
+    /**
+     * 构造  初始化源数据
+     */
     public RouteInfoManager() {
         this.topicQueueTable = new HashMap<String, List<QueueData>>(1024);
         this.brokerAddrTable = new HashMap<String, BrokerData>(128);
@@ -64,6 +89,10 @@ public class RouteInfoManager {
         this.filterServerTable = new HashMap<String, List<String>>(256);
     }
 
+    /**
+     * 返回的是broker cluster数据 cluster->broker组->broker机器
+     * @return
+     */
     public byte[] getAllClusterInfo() {
         ClusterInfo clusterInfoSerializeWrapper = new ClusterInfo();
         clusterInfoSerializeWrapper.setBrokerAddrTable(this.brokerAddrTable);
@@ -71,6 +100,10 @@ public class RouteInfoManager {
         return clusterInfoSerializeWrapper.encode();
     }
 
+    /**
+     * 删除topic
+     * @param topic
+     */
     public void deleteTopic(final String topic) {
         try {
             try {
@@ -84,6 +117,10 @@ public class RouteInfoManager {
         }
     }
 
+    /**
+     * 查询全部topic队列数据
+     * @return
+     */
     public byte[] getAllTopicList() {
         TopicList topicList = new TopicList();
         try {
@@ -103,12 +140,12 @@ public class RouteInfoManager {
     public RegisterBrokerResult registerBroker(
         final String clusterName,
         final String brokerAddr,
-        final String brokerName,
+        final String brokerName, // broker组
         final long brokerId,
-        final String haServerAddr,
-        final TopicConfigSerializeWrapper topicConfigWrapper,
-        final List<String> filterServerList,
-        final Channel channel) {
+        final String haServerAddr, // broker互为HA高可用的机器地址
+        final TopicConfigSerializeWrapper topicConfigWrapper, // topic配置数据
+        final List<String> filterServerList, // broker 部署的filter server列表
+        final Channel channel  ) { // 物理上的netty长链接
         RegisterBrokerResult result = new RegisterBrokerResult();
         try {
             try {
@@ -132,6 +169,7 @@ public class RouteInfoManager {
                 Map<Long, String> brokerAddrsMap = brokerData.getBrokerAddrs();
                 //Switch slave to master: first remove <1, IP:PORT> in namesrv, then add <0, IP:PORT>
                 //The same IP:PORT must only have one record in brokerAddrTable
+                // 删除brokerAddr相同但是brokerId不同的数据（同一台机器不能启动两个broker）
                 Iterator<Entry<Long, String>> it = brokerAddrsMap.entrySet().iterator();
                 while (it.hasNext()) {
                     Entry<Long, String> item = it.next();
@@ -139,7 +177,7 @@ public class RouteInfoManager {
                         it.remove();
                     }
                 }
-
+                // 把本次注册的broker放入broker组中
                 String oldAddr = brokerData.getBrokerAddrs().put(brokerId, brokerAddr);
                 registerFirst = registerFirst || (null == oldAddr);
 
@@ -252,6 +290,11 @@ public class RouteInfoManager {
         }
     }
 
+    /**
+     * perm 是broker对每个topic的权限设置 只读/写/读写
+     * @param brokerName brokerName
+     * @return
+     */
     public int wipeWritePermOfBrokerByLock(final String brokerName) {
         return operateWritePermOfBrokerByLock(brokerName, RequestCode.WIPE_WRITE_PERM_OF_BROKER);
     }
@@ -283,6 +326,7 @@ public class RouteInfoManager {
 
             for (QueueData qd : qdList) {
                 if (qd.getBrokerName().equals(brokerName)) {
+                    // broker 下topic 读写权限配置
                     int perm = qd.getPerm();
                     switch (requestCode) {
                         case RequestCode.WIPE_WRITE_PERM_OF_BROKER:
@@ -301,6 +345,13 @@ public class RouteInfoManager {
         return topicCnt;
     }
 
+    /**
+     * 下线broker 集群+组+机器
+     * @param clusterName
+     * @param brokerAddr
+     * @param brokerName
+     * @param brokerId
+     */
     public void unregisterBroker(
         final String clusterName,
         final String brokerAddr,
@@ -361,6 +412,10 @@ public class RouteInfoManager {
         }
     }
 
+    /**
+     * 根据brokerName 删除topic
+     * @param brokerName
+     */
     private void removeTopicByBrokerName(final String brokerName) {
         Iterator<Entry<String, List<QueueData>>> itMap = this.topicQueueTable.entrySet().iterator();
         while (itMap.hasNext()) {
@@ -384,6 +439,12 @@ public class RouteInfoManager {
         }
     }
 
+    /**
+     * 获取topic的路由信息，生产消息和消费消息的时候， 设置的都是namesrv的地址
+     * 针对一个topic里的多个queues来进行路由， 我这次数据要写入到那个queue里面
+     * @param topic
+     * @return
+     */
     public TopicRouteData pickupTopicRouteData(final String topic) {
         TopicRouteData topicRouteData = new TopicRouteData();
         boolean foundQueueData = false;
@@ -439,13 +500,19 @@ public class RouteInfoManager {
         return null;
     }
 
+    /**
+     * 扫描不活跃的broker
+     */
     public void scanNotActiveBroker() {
         Iterator<Entry<String, BrokerLiveInfo>> it = this.brokerLiveTable.entrySet().iterator();
         while (it.hasNext()) {
             Entry<String, BrokerLiveInfo> next = it.next();
             long last = next.getValue().getLastUpdateTimestamp();
+            // 超时
             if ((last + BROKER_CHANNEL_EXPIRED_TIME) < System.currentTimeMillis()) {
+                // 关闭channel
                 RemotingUtil.closeChannel(next.getValue().getChannel());
+                // 从列表中删除broker
                 it.remove();
                 log.warn("The broker channel expired, {} {}ms", next.getKey(), BROKER_CHANNEL_EXPIRED_TIME);
                 this.onChannelDestroy(next.getKey(), next.getValue().getChannel());
@@ -453,6 +520,11 @@ public class RouteInfoManager {
         }
     }
 
+    /**
+     * 删除broker相关的数据结构
+     * @param remoteAddr
+     * @param channel
+     */
     public void onChannelDestroy(String remoteAddr, Channel channel) {
         String brokerAddrFound = null;
         if (channel != null) {
@@ -574,6 +646,9 @@ public class RouteInfoManager {
         }
     }
 
+    /**
+     * 周期性打印信息
+     */
     public void printAllPeriodically() {
         try {
             try {
@@ -622,6 +697,10 @@ public class RouteInfoManager {
         }
     }
 
+    /**
+     * 获取系统topic列表
+     * @return
+     */
     public byte[] getSystemTopicList() {
         TopicList topicList = new TopicList();
         try {
@@ -766,9 +845,21 @@ public class RouteInfoManager {
 }
 
 class BrokerLiveInfo {
+    /**
+     * 最后更新时间  broker可以主动给nameserver上报心跳，  每次上报会更新这个数据
+     */
     private long lastUpdateTimestamp;
+    /**
+     * 数据版本号
+     */
     private DataVersion dataVersion;
+    /**
+     * netty 网络链接 长链接
+     */
     private Channel channel;
+    /**
+     * 跟当前这个broker机器构成HA高可用的broker地址
+     */
     private String haServerAddr;
 
     public BrokerLiveInfo(long lastUpdateTimestamp, DataVersion dataVersion, Channel channel,

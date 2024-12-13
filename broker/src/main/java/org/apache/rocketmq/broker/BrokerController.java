@@ -83,6 +83,7 @@ import org.apache.rocketmq.common.DataVersion;
 import org.apache.rocketmq.common.ThreadFactoryImpl;
 import org.apache.rocketmq.common.TopicConfig;
 import org.apache.rocketmq.common.UtilAll;
+import org.apache.rocketmq.common.annotation.ImportantZone;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.common.constant.PermName;
 import org.apache.rocketmq.common.namesrv.RegisterBrokerResult;
@@ -112,30 +113,96 @@ import org.apache.rocketmq.store.stats.BrokerStats;
 import org.apache.rocketmq.store.stats.BrokerStatsManager;
 import org.apache.rocketmq.store.stats.LmqBrokerStatsManager;
 
+@ImportantZone
 public class BrokerController {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private static final InternalLogger LOG_PROTECTION = InternalLoggerFactory.getLogger(LoggerName.PROTECTION_LOGGER_NAME);
     private static final InternalLogger LOG_WATER_MARK = InternalLoggerFactory.getLogger(LoggerName.WATER_MARK_LOGGER_NAME);
+    // broker核心配置
     private final BrokerConfig brokerConfig;
+    // broker 快速失败的组件
+    private BrokerFastFailure brokerFastFailure;
+    // netty服务端配置
     private final NettyServerConfig nettyServerConfig;
+    // netty客户端配置
     private final NettyClientConfig nettyClientConfig;
+    // 数据存储配置
     private final MessageStoreConfig messageStoreConfig;
+    // broker配置管理相关组件
+    private Configuration configuration;
+    private FileWatchService fileWatchService;
+
+    // 网络通信相关组件
+    private RemotingServer remotingServer;
+    private RemotingServer fastRemotingServer;
+
+    // 消息存储相关组件
+    private MessageStore messageStore;
+    private InetSocketAddress storeHost;
+
+    // consumer相关的组件
+    // consumer消费的时候的offset管理组件
     private final ConsumerOffsetManager consumerOffsetManager;
     private final ConsumerManager consumerManager;
     private final ConsumerFilterManager consumerFilterManager;
-    private final ProducerManager producerManager;
-    private final ClientHousekeepingService clientHousekeepingService;
     private final PullMessageProcessor pullMessageProcessor;
     private final PullRequestHoldService pullRequestHoldService;
-    private final MessageArrivingListener messageArrivingListener;
-    private final Broker2Client broker2Client;
     private final SubscriptionGroupManager subscriptionGroupManager;
     private final ConsumerIdsChangeListener consumerIdsChangeListener;
-    private final RebalanceLockManager rebalanceLockManager = new RebalanceLockManager();
+
+    // producer 相关组件
+    private final ProducerManager producerManager;
+
+    // 网络通信相关的组件
+    // 客户端网络连接事件监听组件
+    private final ClientHousekeepingService clientHousekeepingService;
+    // broker主动对建立连接的客户端进行通信的组件
+    private final Broker2Client broker2Client;
+    // broker和nameserver交互的组件
     private final BrokerOuterAPI brokerOuterAPI;
+
+    // 消息到达监听器
+    private final MessageArrivingListener messageArrivingListener;
+
+    // broker自己有关的组件
+    // broker重平衡锁管理组件
+    private final RebalanceLockManager rebalanceLockManager = new RebalanceLockManager();
+    // 调度线程池组件
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl(
         "BrokerControllerScheduledThread"));
+    // slave节点同步组件 主从同步
     private final SlaveSynchronize slaveSynchronize;
+    // 主从复制异步操作句柄
+    private Future<?> slaveSyncFuture;
+
+    // filter server 管理组件
+    private final FilterServerManager filterServerManager;
+    // 统计管理组件
+    private final BrokerStatsManager brokerStatsManager;
+    // 发送消息回调钩子
+    private final List<SendMessageHook> sendMessageHookList = new ArrayList<SendMessageHook>();
+    // 消费消息回调钩子
+    private final List<ConsumeMessageHook> consumeMessageHookList = new ArrayList<ConsumeMessageHook>();
+
+
+    // broker 管理topic源数据组件
+    private TopicConfigManager topicConfigManager;
+
+    // 是否启用周期性的更新master节点HA高可用服务器地址的功能
+    private boolean updateMasterHAServerAddrPeriodically = false;
+
+    // 访问校验组件
+    private Map<Class,AccessValidator> accessValidatorMap = new HashMap<Class, AccessValidator>();
+    // broker 统计组件
+    private BrokerStats brokerStats;
+
+    // 事务消息高阶特性相关组件
+    private TransactionalMessageCheckService transactionalMessageCheckService;
+    private TransactionalMessageService transactionalMessageService;
+    private AbstractTransactionalMessageCheckListener transactionalMessageCheckListener;
+
+
+    // broker 内存队列
     private final BlockingQueue<Runnable> sendThreadPoolQueue;
     private final BlockingQueue<Runnable> putThreadPoolQueue;
     private final BlockingQueue<Runnable> pullThreadPoolQueue;
@@ -145,14 +212,8 @@ public class BrokerController {
     private final BlockingQueue<Runnable> heartbeatThreadPoolQueue;
     private final BlockingQueue<Runnable> consumerManagerThreadPoolQueue;
     private final BlockingQueue<Runnable> endTransactionThreadPoolQueue;
-    private final FilterServerManager filterServerManager;
-    private final BrokerStatsManager brokerStatsManager;
-    private final List<SendMessageHook> sendMessageHookList = new ArrayList<SendMessageHook>();
-    private final List<ConsumeMessageHook> consumeMessageHookList = new ArrayList<ConsumeMessageHook>();
-    private MessageStore messageStore;
-    private RemotingServer remotingServer;
-    private RemotingServer fastRemotingServer;
-    private TopicConfigManager topicConfigManager;
+
+    // broker 线程池
     private ExecutorService sendMessageExecutor;
     private ExecutorService putMessageFutureExecutor;
     private ExecutorService pullMessageExecutor;
@@ -163,17 +224,9 @@ public class BrokerController {
     private ExecutorService heartbeatExecutor;
     private ExecutorService consumerManageExecutor;
     private ExecutorService endTransactionExecutor;
-    private boolean updateMasterHAServerAddrPeriodically = false;
-    private BrokerStats brokerStats;
-    private InetSocketAddress storeHost;
-    private BrokerFastFailure brokerFastFailure;
-    private Configuration configuration;
-    private FileWatchService fileWatchService;
-    private TransactionalMessageCheckService transactionalMessageCheckService;
-    private TransactionalMessageService transactionalMessageService;
-    private AbstractTransactionalMessageCheckListener transactionalMessageCheckListener;
-    private Future<?> slaveSyncFuture;
-    private Map<Class,AccessValidator> accessValidatorMap = new HashMap<Class, AccessValidator>();
+
+
+
 
     public BrokerController(
         final BrokerConfig brokerConfig,
@@ -181,42 +234,72 @@ public class BrokerController {
         final NettyClientConfig nettyClientConfig,
         final MessageStoreConfig messageStoreConfig
     ) {
+        // 核心配置赋值
         this.brokerConfig = brokerConfig;
         this.nettyServerConfig = nettyServerConfig;
         this.nettyClientConfig = nettyClientConfig;
         this.messageStoreConfig = messageStoreConfig;
-        this.consumerOffsetManager = messageStoreConfig.isEnableLmq() ? new LmqConsumerOffsetManager(this) : new ConsumerOffsetManager(this);
-        this.topicConfigManager = messageStoreConfig.isEnableLmq() ? new LmqTopicConfigManager(this) : new TopicConfigManager(this);
-        this.pullMessageProcessor = new PullMessageProcessor(this);
-        this.pullRequestHoldService = messageStoreConfig.isEnableLmq() ? new LmqPullRequestHoldService(this) : new PullRequestHoldService(this);
-        this.messageArrivingListener = new NotifyMessageArrivingListener(this.pullRequestHoldService);
-        this.consumerIdsChangeListener = new DefaultConsumerIdsChangeListener(this);
-        this.consumerManager = new ConsumerManager(this.consumerIdsChangeListener);
-        this.consumerFilterManager = new ConsumerFilterManager(this);
-        this.producerManager = new ProducerManager();
-        this.clientHousekeepingService = new ClientHousekeepingService(this);
-        this.broker2Client = new Broker2Client(this);
-        this.subscriptionGroupManager = messageStoreConfig.isEnableLmq() ? new LmqSubscriptionGroupManager(this) : new SubscriptionGroupManager(this);
-        this.brokerOuterAPI = new BrokerOuterAPI(nettyClientConfig);
-        this.filterServerManager = new FilterServerManager(this);
 
+        // consumer offset 管理组件
+        this.consumerOffsetManager = messageStoreConfig.isEnableLmq() ? new LmqConsumerOffsetManager(this) : new ConsumerOffsetManager(this);
+        // topic元数据配置组件， 当前我的这个broker上面管理了哪些topic的queue
+        this.topicConfigManager = messageStoreConfig.isEnableLmq() ? new LmqTopicConfigManager(this) : new TopicConfigManager(this);
+        // 拉取消息处理组件
+        this.pullMessageProcessor = new PullMessageProcessor(this);
+        // 拉取消息长轮询挂起服务
+        this.pullRequestHoldService = messageStoreConfig.isEnableLmq() ? new LmqPullRequestHoldService(this) : new PullRequestHoldService(this);
+        // 新消息到达通知长轮询挂起服务的监听器
+        this.messageArrivingListener = new NotifyMessageArrivingListener(this.pullRequestHoldService);
+        // consumer ids变更监听器
+        this.consumerIdsChangeListener = new DefaultConsumerIdsChangeListener(this);
+        // 消费者管理组件
+        this.consumerManager = new ConsumerManager(this.consumerIdsChangeListener);
+        // 消费者过滤器管理组件
+        this.consumerFilterManager = new ConsumerFilterManager(this);
+        // 生产者管理组件
+        this.producerManager = new ProducerManager();
+        // 客户端网络连接事件监听服务
+        this.clientHousekeepingService = new ClientHousekeepingService(this);
+        // broker和客户端网络通信组件
+        this.broker2Client = new Broker2Client(this);
+        // 订阅组管理组件
+        this.subscriptionGroupManager = messageStoreConfig.isEnableLmq() ? new LmqSubscriptionGroupManager(this) : new SubscriptionGroupManager(this);
+        // broker外部API
+        this.brokerOuterAPI = new BrokerOuterAPI(nettyClientConfig);
+        // 过滤服务器管理组件
+//        @ImportantZone
+        this.filterServerManager = new FilterServerManager(this);
+        // 主从同步组件
         this.slaveSynchronize = new SlaveSynchronize(this);
 
+        // 内存队列
+        // 发送线程池队列
         this.sendThreadPoolQueue = new LinkedBlockingQueue<Runnable>(this.brokerConfig.getSendThreadPoolQueueCapacity());
+        // put线程池队列
         this.putThreadPoolQueue = new LinkedBlockingQueue<Runnable>(this.brokerConfig.getPutThreadPoolQueueCapacity());
+        // 拉取线程池队列
         this.pullThreadPoolQueue = new LinkedBlockingQueue<Runnable>(this.brokerConfig.getPullThreadPoolQueueCapacity());
+        // 重试线程池队列
         this.replyThreadPoolQueue = new LinkedBlockingQueue<Runnable>(this.brokerConfig.getReplyThreadPoolQueueCapacity());
+        // 查询线程池队列
         this.queryThreadPoolQueue = new LinkedBlockingQueue<Runnable>(this.brokerConfig.getQueryThreadPoolQueueCapacity());
+        // 客户端管理线程池队列
         this.clientManagerThreadPoolQueue = new LinkedBlockingQueue<Runnable>(this.brokerConfig.getClientManagerThreadPoolQueueCapacity());
+        // 消费者管理线程池队列
         this.consumerManagerThreadPoolQueue = new LinkedBlockingQueue<Runnable>(this.brokerConfig.getConsumerManagerThreadPoolQueueCapacity());
+        // 心跳机制线程池队列
         this.heartbeatThreadPoolQueue = new LinkedBlockingQueue<Runnable>(this.brokerConfig.getHeartbeatThreadPoolQueueCapacity());
+        // 结束事务线程池队列
         this.endTransactionThreadPoolQueue = new LinkedBlockingQueue<Runnable>(this.brokerConfig.getEndTransactionPoolQueueCapacity());
 
+
+        // broker统计管理组件
         this.brokerStatsManager = messageStoreConfig.isEnableLmq() ? new LmqBrokerStatsManager(this.brokerConfig.getBrokerClusterName(), this.brokerConfig.isEnableDetailStat()) : new BrokerStatsManager(this.brokerConfig.getBrokerClusterName(), this.brokerConfig.isEnableDetailStat());
-
+        // 默认数据存储地址就是broker自己的地址
         this.setStoreHost(new InetSocketAddress(this.getBrokerConfig().getBrokerIP1(), this.getNettyServerConfig().getListenPort()));
-
+        // broker 快速失败组件
         this.brokerFastFailure = new BrokerFastFailure(this);
+        // 核心配置组件
         this.configuration = new Configuration(
             log,
             BrokerPathConfigHelper.getBrokerConfigPath(),
@@ -241,17 +324,25 @@ public class BrokerController {
     }
 
     public boolean initialize() throws CloneNotSupportedException {
+        // 从磁盘中加载topic元数据
         boolean result = this.topicConfigManager.load();
-
+        // 从磁盘中加载消费偏移量元数据
         result = result && this.consumerOffsetManager.load();
+        // 从磁盘中加载订阅消费组元数据
         result = result && this.subscriptionGroupManager.load();
+        // 从磁盘中加载消费过滤元数据
         result = result && this.consumerFilterManager.load();
 
         if (result) {
             try {
+                // 构造核心消息存储组件
                 this.messageStore =
-                    new DefaultMessageStore(this.messageStoreConfig, this.brokerStatsManager, this.messageArrivingListener,
-                        this.brokerConfig);
+                    new DefaultMessageStore(
+                            this.messageStoreConfig, // 消息存储配置
+                            this.brokerStatsManager, // broker 统计配置
+                            this.messageArrivingListener, // 消息到达监听器
+                            this.brokerConfig); // broker配置
+                // 如果启用了dleger数据同步机制，会去初始化dleger对应的组件
                 if (messageStoreConfig.isEnableDLegerCommitLog()) {
                     DLedgerRoleChangeHandler roleChangeHandler = new DLedgerRoleChangeHandler(this, (DefaultMessageStore) messageStore);
                     ((DLedgerCommitLog)((DefaultMessageStore) messageStore).getCommitLog()).getdLedgerServer().getdLedgerLeaderElector().addRoleChangeHandler(roleChangeHandler);
@@ -271,6 +362,7 @@ public class BrokerController {
 
         if (result) {
             this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.clientHousekeepingService);
+            // 基于监听端口-2就是fast监听宽口
             NettyServerConfig fastConfig = (NettyServerConfig) this.nettyServerConfig.clone();
             fastConfig.setListenPort(nettyServerConfig.getListenPort() - 2);
             this.fastRemotingServer = new NettyRemotingServer(fastConfig, this.clientHousekeepingService);
@@ -954,6 +1046,7 @@ public class BrokerController {
 
         if (!PermName.isWriteable(this.getBrokerConfig().getBrokerPermission())
             || !PermName.isReadable(this.getBrokerConfig().getBrokerPermission())) {
+            // 如果不可写 or 不可读 克隆topicConfigTable并修改permission
             ConcurrentHashMap<String, TopicConfig> topicConfigTable = new ConcurrentHashMap<String, TopicConfig>();
             for (TopicConfig topicConfig : topicConfigWrapper.getTopicConfigTable().values()) {
                 TopicConfig tmp =
@@ -964,11 +1057,12 @@ public class BrokerController {
             topicConfigWrapper.setTopicConfigTable(topicConfigTable);
         }
 
+        // 如果是强制注册或需要进行注册
         if (forceRegister || needRegister(this.brokerConfig.getBrokerClusterName(),
-            this.getBrokerAddr(),
-            this.brokerConfig.getBrokerName(),
-            this.brokerConfig.getBrokerId(),
-            this.brokerConfig.getRegisterBrokerTimeoutMills())) {
+                                        this.getBrokerAddr(),
+                                        this.brokerConfig.getBrokerName(),
+                                        this.brokerConfig.getBrokerId(),
+                                        this.brokerConfig.getRegisterBrokerTimeoutMills())) {
             doRegisterBrokerAll(checkOrderConfig, oneway, topicConfigWrapper);
         }
     }
@@ -1003,6 +1097,15 @@ public class BrokerController {
         }
     }
 
+    /**
+     * 判断是否需要注册
+     * @param clusterName 集群名称
+     * @param brokerAddr broker地址
+     * @param brokerName broker组
+     * @param brokerId brokerId
+     * @param timeoutMills 超时时间
+     * @return
+     */
     private boolean needRegister(final String clusterName,
         final String brokerAddr,
         final String brokerName,

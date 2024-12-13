@@ -71,6 +71,7 @@ public abstract class NettyRemotingAbstract {
 
     /**
      * This map caches all on-going requests.
+     * 通过remoting server 发送出去的所有请求都会缓存在responseTable里面， 等待请求响应
      */
     protected final ConcurrentMap<Integer /* opaque */, ResponseFuture> responseTable =
         new ConcurrentHashMap<Integer, ResponseFuture>(256);
@@ -78,6 +79,7 @@ public abstract class NettyRemotingAbstract {
     /**
      * This container holds all processors per request code, aka, for each incoming request, we may look up the
      * responding processor in this map to handle the request.
+     * 对入请求处理的执行器和线程池的集合
      */
     protected final HashMap<Integer/* request code */, Pair<NettyRequestProcessor, ExecutorService>> processorTable =
         new HashMap<Integer, Pair<NettyRequestProcessor, ExecutorService>>(64);
@@ -89,16 +91,19 @@ public abstract class NettyRemotingAbstract {
 
     /**
      * The default request processor to use in case there is no exact match in {@link #processorTable} per request code.
+     * 默认请求处理器
      */
     protected Pair<NettyRequestProcessor, ExecutorService> defaultRequestProcessor;
 
     /**
      * SSL context via which to create {@link SslHandler}.
+     * 用于进行安全网络加密通信，netty内嵌的ssl/tls安全加密通信组件
      */
     protected volatile SslContext sslContext;
 
     /**
      * custom rpc hooks
+     * rpc调用的钩子
      */
     protected List<RPCHook> rpcHooks = new ArrayList<RPCHook>();
 
@@ -149,6 +154,10 @@ public abstract class NettyRemotingAbstract {
      * @param ctx Channel handler context.
      * @param msg incoming remoting command.
      * @throws Exception if there were any error while processing the incoming command.
+     *
+     *
+     * 如果broker主动对我的namesrv发起一个rpc调用请求， rpc调用和响应都是RemotingCommand
+     * 我得nettyServer会反序列化rpc调用请求， 从字节数组搞成RemotingCommand， 就会把这个rpc请求交给这个方法
      */
     public void processMessageReceived(ChannelHandlerContext ctx, RemotingCommand msg) throws Exception {
         final RemotingCommand cmd = msg;
@@ -190,20 +199,25 @@ public abstract class NettyRemotingAbstract {
      * @param cmd request command.
      */
     public void processRequestCommand(final ChannelHandlerContext ctx, final RemotingCommand cmd) {
+        // 挑选请求处理组件
         final Pair<NettyRequestProcessor, ExecutorService> matched = this.processorTable.get(cmd.getCode());
         final Pair<NettyRequestProcessor, ExecutorService> pair = null == matched ? this.defaultRequestProcessor : matched;
         final int opaque = cmd.getOpaque();
 
         if (pair != null) {
+            // 收到了请求之后， 对于不同的请求处理组件可以关联不同的请求处理线程池
             Runnable run = new Runnable() {
                 @Override
                 public void run() {
                     try {
+                        // 根据网络链接解析出远程地址
                         String remoteAddr = RemotingHelper.parseChannelRemoteAddr(ctx.channel());
+                        // 执行before 钩子
                         doBeforeRpcHooks(remoteAddr, cmd);
                         final RemotingResponseCallback callback = new RemotingResponseCallback() {
                             @Override
                             public void callback(RemotingCommand response) {
+                                // 去执行rpc调用完毕的钩子
                                 doAfterRpcHooks(remoteAddr, cmd, response);
                                 if (!cmd.isOnewayRPC()) {
                                     if (response != null) {
@@ -221,8 +235,10 @@ public abstract class NettyRemotingAbstract {
                                 }
                             }
                         };
+                        // 如果是异步处理组件
                         if (pair.getObject1() instanceof AsyncNettyRequestProcessor) {
                             AsyncNettyRequestProcessor processor = (AsyncNettyRequestProcessor)pair.getObject1();
+                            // 对请求命令异步处理， 同时传递进去netty请求处理上下文， 响应callback
                             processor.asyncProcessRequest(ctx, cmd, callback);
                         } else {
                             NettyRequestProcessor processor = pair.getObject1();
@@ -243,6 +259,7 @@ public abstract class NettyRemotingAbstract {
                 }
             };
 
+            // 如果请求要拒绝处理的话
             if (pair.getObject1().rejectRequest()) {
                 final RemotingCommand response = RemotingCommand.createResponseCommand(RemotingSysResponseCode.SYSTEM_BUSY,
                     "[REJECTREQUEST]system busy, start flow control for a while");
@@ -252,7 +269,9 @@ public abstract class NettyRemotingAbstract {
             }
 
             try {
+                // 会把线程任务、发送请求过来的网络连接、请求命令
                 final RequestTask requestTask = new RequestTask(run, ctx.channel(), cmd);
+                // 找到请求处理组件并将任务提交到线程池中
                 pair.getObject2().submit(requestTask);
             } catch (RejectedExecutionException e) {
                 if ((System.currentTimeMillis() % 10000) == 0) {
@@ -293,6 +312,7 @@ public abstract class NettyRemotingAbstract {
 
             responseTable.remove(opaque);
 
+            // 如果是sync的话是没有invoke callback的
             if (responseFuture.getInvokeCallback() != null) {
                 executeInvokeCallback(responseFuture);
             } else {
@@ -379,6 +399,7 @@ public abstract class NettyRemotingAbstract {
     /**
      * <p>
      * This method is periodically invoked to scan and expire deprecated request.
+     * 定期扫描失效的responseFuture
      * </p>
      */
     public void scanResponseTable() {
@@ -414,6 +435,9 @@ public abstract class NettyRemotingAbstract {
             final ResponseFuture responseFuture = new ResponseFuture(channel, opaque, timeoutMillis, null, null);
             this.responseTable.put(opaque, responseFuture);
             final SocketAddress addr = channel.remoteAddress();
+            // 通过netty的channel发送数据，这里用的是netty一步发送的机制
+            // 如果这个请求发送成功/失败了以后，回调一个listener
+            // 成功， responseFuture标记为true， 失败， responseFuture标记失败并移除responseTable
             channel.writeAndFlush(request).addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture f) throws Exception {
@@ -514,6 +538,7 @@ public abstract class NettyRemotingAbstract {
     /**
      * mark the request of the specified channel as fail and to invoke fail callback immediately
      * @param channel the channel which is close already
+     * 将channel发送出去的网络连接全部快速失败掉
      */
     protected void failFast(final Channel channel) {
         Iterator<Entry<Integer, ResponseFuture>> it = responseTable.entrySet().iterator();
@@ -528,6 +553,16 @@ public abstract class NettyRemotingAbstract {
         }
     }
 
+    /**
+     * 发送一个oneway请求， 只要发送出去即可， 不需要等待响应
+     * @param channel
+     * @param request
+     * @param timeoutMillis
+     * @throws InterruptedException
+     * @throws RemotingTooMuchRequestException
+     * @throws RemotingTimeoutException
+     * @throws RemotingSendRequestException
+     */
     public void invokeOnewayImpl(final Channel channel, final RemotingCommand request, final long timeoutMillis)
         throws InterruptedException, RemotingTooMuchRequestException, RemotingTimeoutException, RemotingSendRequestException {
         request.markOnewayRPC();

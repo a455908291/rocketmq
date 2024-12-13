@@ -138,6 +138,7 @@ public class MixAll {
         return 0;
     }
 
+    // 每次进行持久化， 新文件写入.tmp 老文件写入.bak做备份， tmp文件重命名
     public static void string2File(final String str, final String fileName) throws IOException {
 
         String tmpFile = fileName + ".tmp";

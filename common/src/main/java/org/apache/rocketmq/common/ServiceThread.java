@@ -27,10 +27,15 @@ public abstract class ServiceThread implements Runnable {
 
     private static final long JOIN_TIME = 90 * 1000;
 
+    // 线程任务
     private Thread thread;
+    // 多线程并发控制
     protected final CountDownLatch2 waitPoint = new CountDownLatch2(1);
+    // 是否已经通知过
     protected volatile AtomicBoolean hasNotified = new AtomicBoolean(false);
+    // 是否已经停止
     protected volatile boolean stopped = false;
+    // 是否后台运行的线程
     protected boolean isDaemon = false;
 
     //Make it able to restart the thread
@@ -120,13 +125,18 @@ public abstract class ServiceThread implements Runnable {
         log.info("makestop thread " + this.getServiceName());
     }
 
+    // 可能说你的服务线程在线程循环的执行方法里， 可能会进行一定的休眠、阻塞等待
+    // 如果说此时线程里面收到了一个任务/请求了。 需要这个线程立即苏醒来进行处理， 此时必须唤醒这个线程
+    //
     public void wakeup() {
         if (hasNotified.compareAndSet(false, true)) {
             waitPoint.countDown(); // notify
         }
     }
 
+    // 可以再线程体力进入等待的状态， 还可以设置通知时间
     protected void waitForRunning(long interval) {
+        // 修改是否进行通知
         if (hasNotified.compareAndSet(true, false)) {
             this.onWaitEnd();
             return;

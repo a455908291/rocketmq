@@ -85,39 +85,66 @@ import org.apache.rocketmq.remoting.exception.RemotingException;
 import org.apache.rocketmq.remoting.netty.NettyClientConfig;
 import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 
+/**
+ * 网络通信客户端实例
+ */
 public class MQClientInstance {
     private final static long LOCK_TIMEOUT_MILLIS = 3000;
     private final InternalLogger log = ClientLogger.getLog();
+    // 客户端配置
     private final ClientConfig clientConfig;
+    // 实例索引
     private final int instanceIndex;
+    // clientId
     private final String clientId;
+    // 启动时间戳
     private final long bootTimestamp = System.currentTimeMillis();
+    // producer映射
     private final ConcurrentMap<String/* group */, MQProducerInner> producerTable = new ConcurrentHashMap<String, MQProducerInner>();
+    // consumer映射
     private final ConcurrentMap<String/* group */, MQConsumerInner> consumerTable = new ConcurrentHashMap<String, MQConsumerInner>();
+    // admin组件映射
     private final ConcurrentMap<String/* group */, MQAdminExtInner> adminExtTable = new ConcurrentHashMap<String, MQAdminExtInner>();
+    // netty网络客户端配
     private final NettyClientConfig nettyClientConfig;
+    // 客户端通信API实现
     private final MQClientAPIImpl mQClientAPIImpl;
+    // 管理客户端网络通信组件
     private final MQAdminImpl mQAdminImpl;
+    // topic路由数据
     private final ConcurrentMap<String/* Topic */, TopicRouteData> topicRouteTable = new ConcurrentHashMap<String, TopicRouteData>();
+    // namesrv 锁
     private final Lock lockNamesrv = new ReentrantLock();
+    // 心跳锁
     private final Lock lockHeartbeat = new ReentrantLock();
+    // broker地址
     private final ConcurrentMap<String/* Broker Name */, HashMap<Long/* brokerId */, String/* address */>> brokerAddrTable =
         new ConcurrentHashMap<String, HashMap<Long, String>>();
+    // broker 版本号
     private final ConcurrentMap<String/* Broker Name */, HashMap<String/* address */, Integer>> brokerVersionTable =
         new ConcurrentHashMap<String, HashMap<String, Integer>>();
+    // 调度线程池
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
         @Override
         public Thread newThread(Runnable r) {
             return new Thread(r, "MQClientFactoryScheduledThread");
         }
     });
+    // 网络客户端请求处理组件
     private final ClientRemotingProcessor clientRemotingProcessor;
+    // 拉取消息服务组件
     private final PullMessageService pullMessageService;
+    // 重平衡组件
     private final RebalanceService rebalanceService;
+    // 所属消息生产者组件
     private final DefaultMQProducer defaultMQProducer;
+    // consumer统计管理器
     private final ConsumerStatsManager consumerStatsManager;
+    // 发送心跳次数
     private final AtomicLong sendHeartbeatTimesTotal = new AtomicLong(0);
+    // 服务组件状态
     private ServiceState serviceState = ServiceState.CREATE_JUST;
+    // 随机数
     private Random random = new Random();
 
     public MQClientInstance(ClientConfig clientConfig, int instanceIndex, String clientId) {

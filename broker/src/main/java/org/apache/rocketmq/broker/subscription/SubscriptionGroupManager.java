@@ -31,12 +31,19 @@ import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.common.subscription.SubscriptionGroupConfig;
 import org.apache.rocketmq.remoting.protocol.RemotingSerializable;
 
+/**
+ * 订阅消费组管理
+ * /Users/xuezhipeng/sourceCodeReading/rocketmq/store/config/subscriptionGroup.json
+ */
 public class SubscriptionGroupManager extends ConfigManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
 
+    // 订阅消费组名称 -> 订阅消费组配置
     private final ConcurrentMap<String, SubscriptionGroupConfig> subscriptionGroupTable =
         new ConcurrentHashMap<String, SubscriptionGroupConfig>(1024);
+    // 数据版本号
     private final DataVersion dataVersion = new DataVersion();
+
     private transient BrokerController brokerController;
 
     public SubscriptionGroupManager() {
@@ -49,6 +56,7 @@ public class SubscriptionGroupManager extends ConfigManager {
     }
 
     private void init() {
+        // 初始化一系列的针对系统topic的消费者
         {
             SubscriptionGroupConfig subscriptionGroupConfig = new SubscriptionGroupConfig();
             subscriptionGroupConfig.setGroupName(MixAll.TOOLS_CONSUMER_GROUP);

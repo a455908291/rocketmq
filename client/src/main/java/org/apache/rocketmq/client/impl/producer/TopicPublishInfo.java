@@ -23,11 +23,29 @@ import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.common.protocol.route.QueueData;
 import org.apache.rocketmq.common.protocol.route.TopicRouteData;
 
+/**
+ * topic 发送信息
+ */
 public class TopicPublishInfo {
+    /**
+     * 是否是order topic
+     */
     private boolean orderTopic = false;
+    /**
+     * 是否包含topic路由信息
+     */
     private boolean haveTopicRouterInfo = false;
+    /**
+     * 消息队列列表
+     */
     private List<MessageQueue> messageQueueList = new ArrayList<MessageQueue>();
+    /**
+     * 线程本地副本的索引
+     */
     private volatile ThreadLocalIndex sendWhichQueue = new ThreadLocalIndex();
+    /**
+     * topic路由数据
+     */
     private TopicRouteData topicRouteData;
 
     public boolean isOrderTopic() {

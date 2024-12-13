@@ -42,7 +42,7 @@ public class RocketMQSerializable {
             extFieldsBytes = mapSerialize(cmd.getExtFields());
             extLen = extFieldsBytes.length;
         }
-
+        // 计算消息头总长度
         int totalLen = calTotalLen(remarkLen, extLen);
 
         ByteBuffer headerBuffer = ByteBuffer.allocate(totalLen);

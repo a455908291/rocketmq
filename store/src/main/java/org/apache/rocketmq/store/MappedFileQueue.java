@@ -36,17 +36,19 @@ public class MappedFileQueue {
 
     private static final int DELETE_FILES_BATCH_MAX = 10;
 
+    // commitLog 存储路径
     private final String storePath;
-
+    // 映射文件大小
     protected final int mappedFileSize;
-
+    // 所有的映射文件
     protected final CopyOnWriteArrayList<MappedFile> mappedFiles = new CopyOnWriteArrayList<MappedFile>();
-
+    // 分配映射文件服务
     private final AllocateMappedFileService allocateMappedFileService;
-
+    // 从哪里开始flush
     protected long flushedWhere = 0;
+    // 从哪里开始commit
     private long committedWhere = 0;
-
+    // 存储时间戳
     private volatile long storeTimestamp = 0;
 
     public MappedFileQueue(final String storePath, int mappedFileSize,
@@ -167,6 +169,7 @@ public class MappedFileQueue {
             }
 
             try {
+                // 把磁盘文件封装成MappedFile， 定位一下可以写入的位置
                 MappedFile mappedFile = new MappedFile(file.getPath(), mappedFileSize);
 
                 mappedFile.setWrotePosition(this.mappedFileSize);
@@ -347,10 +350,19 @@ public class MappedFileQueue {
         }
     }
 
+    /**
+     * 删除过期文件
+     * @param expiredTime 过期时间
+     * @param deleteFilesInterval 删除文件间隔
+     * @param intervalForcibly 强制性的间隔
+     * @param cleanImmediately 是否立即删除
+     * @return
+     */
     public int deleteExpiredFileByTime(final long expiredTime,
         final int deleteFilesInterval,
         final long intervalForcibly,
         final boolean cleanImmediately) {
+        // 拷贝mappedFiles
         Object[] mfs = this.copyMappedFiles(0);
 
         if (null == mfs)
@@ -374,6 +386,7 @@ public class MappedFileQueue {
 
                         if (deleteFilesInterval > 0 && (i + 1) < mfsLength) {
                             try {
+                                // 避免频繁删除文件导致磁盘io过高
                                 Thread.sleep(deleteFilesInterval);
                             } catch (InterruptedException e) {
                             }
@@ -388,6 +401,7 @@ public class MappedFileQueue {
             }
         }
 
+        // 对已经销毁的过期文件进行删除
         deleteExpiredFile(files);
 
         return deleteCount;
@@ -438,6 +452,7 @@ public class MappedFileQueue {
 
     public boolean flush(final int flushLeastPages) {
         boolean result = true;
+        // 找到一个当前写入的mappedFile
         MappedFile mappedFile = this.findMappedFileByOffset(this.flushedWhere, this.flushedWhere == 0);
         if (mappedFile != null) {
             long tmpTimeStamp = mappedFile.getStoreTimestamp();

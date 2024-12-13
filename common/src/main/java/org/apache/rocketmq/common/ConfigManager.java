@@ -29,12 +29,14 @@ public abstract class ConfigManager {
     public boolean load() {
         String fileName = null;
         try {
+            // 获取数据文件地址
             fileName = this.configFilePath();
             String jsonString = MixAll.file2String(fileName);
 
             if (null == jsonString || jsonString.length() == 0) {
                 return this.loadBak();
             } else {
+                // 调用子类解码
                 this.decode(jsonString);
                 log.info("load " + fileName + " OK");
                 return true;
@@ -47,6 +49,7 @@ public abstract class ConfigManager {
 
     public abstract String configFilePath();
 
+    // 加载备份数据
     private boolean loadBak() {
         String fileName = null;
         try {
@@ -67,6 +70,9 @@ public abstract class ConfigManager {
 
     public abstract void decode(final String jsonString);
 
+    /**
+     *  磁盘文件持久化
+     */
     public synchronized void persist() {
         String jsonString = this.encode(true);
         if (jsonString != null) {

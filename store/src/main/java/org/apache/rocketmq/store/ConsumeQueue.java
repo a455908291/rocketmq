@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.rocketmq.common.MixAll;
+import org.apache.rocketmq.common.annotation.ImportantZone;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.logging.InternalLogger;
@@ -29,23 +30,57 @@ import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.store.config.BrokerRole;
 import org.apache.rocketmq.store.config.StorePathConfigHelper;
 
+/**
+ * 消费队列
+ */
 public class ConsumeQueue {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
+    /**
+     * 一条数据固定20个字节
+     */
     public static final int CQ_STORE_UNIT_SIZE = 20;
     private static final InternalLogger LOG_ERROR = InternalLoggerFactory.getLogger(LoggerName.STORE_ERROR_LOGGER_NAME);
 
+    /**
+     * 所属存储组件
+     */
     private final DefaultMessageStore defaultMessageStore;
-
+    /**
+     * 内存映射队列
+     */
     private final MappedFileQueue mappedFileQueue;
+    /**
+     * topic
+     */
     private final String topic;
+    /**
+     * 队列id
+     */
     private final int queueId;
+    /**
+     * 索引缓冲区
+     */
     private final ByteBuffer byteBufferIndex;
-
+    /**
+     * 存储路径
+     */
     private final String storePath;
+    /**
+     * mappedFile文件大小
+     */
     private final int mappedFileSize;
+    /**
+     * 最大物理偏移量
+     */
     private long maxPhysicOffset = -1;
+    /**
+     * 最小逻辑偏移量
+     */
     private volatile long minLogicOffset = 0;
+    /**
+     * 消息队列扩展
+     */
     private ConsumeQueueExt consumeQueueExt = null;
 
     public ConsumeQueue(
@@ -54,6 +89,7 @@ public class ConsumeQueue {
         final String storePath,
         final int mappedFileSize,
         final DefaultMessageStore defaultMessageStore) {
+
         this.storePath = storePath;
         this.mappedFileSize = mappedFileSize;
         this.defaultMessageStore = defaultMessageStore;
@@ -69,6 +105,7 @@ public class ConsumeQueue {
 
         this.byteBufferIndex = ByteBuffer.allocate(CQ_STORE_UNIT_SIZE);
 
+        // 如果启用了扩展结构 默认false
         if (defaultMessageStore.getMessageStoreConfig().isEnableConsumeQueueExt()) {
             this.consumeQueueExt = new ConsumeQueueExt(
                 topic,
@@ -80,6 +117,11 @@ public class ConsumeQueue {
         }
     }
 
+    /**
+     * load
+     * 把磁盘文件映射到mappedFIle里面
+     * @return
+     */
     public boolean load() {
         boolean result = this.mappedFileQueue.load();
         log.info("load consume queue " + this.topic + "-" + this.queueId + " " + (result ? "OK" : "Failed"));
@@ -89,10 +131,14 @@ public class ConsumeQueue {
         return result;
     }
 
+    /**
+     * 恢复 实现磁盘数据到内存映射区域的恢复
+     */
     public void recover() {
         final List<MappedFile> mappedFiles = this.mappedFileQueue.getMappedFiles();
         if (!mappedFiles.isEmpty()) {
 
+            // 从倒数第三个开始
             int index = mappedFiles.size() - 3;
             if (index < 0)
                 index = 0;
@@ -104,6 +150,7 @@ public class ConsumeQueue {
             long mappedFileOffset = 0;
             long maxExtAddr = 1;
             while (true) {
+                // 把数据全部读取一遍， 预热
                 for (int i = 0; i < mappedFileSizeLogics; i += CQ_STORE_UNIT_SIZE) {
                     long offset = byteBuffer.getLong();
                     int size = byteBuffer.getInt();
@@ -156,6 +203,11 @@ public class ConsumeQueue {
         }
     }
 
+    /**
+     * 根据时间戳读取消费队列里的offset偏移量
+     * @param timestamp
+     * @return
+     */
     public long getOffsetInQueueByTime(final long timestamp) {
         MappedFile mappedFile = this.mappedFileQueue.getMappedFileByTime(timestamp);
         if (mappedFile != null) {
@@ -380,6 +432,12 @@ public class ConsumeQueue {
         return this.minLogicOffset / CQ_STORE_UNIT_SIZE;
     }
 
+    /**
+     * 消息投递
+     * @param request
+     * @param multiQueue
+     */
+    @ImportantZone(desc = "consumeQueue消息投递")
     public void putMessagePositionInfoWrapper(DispatchRequest request, boolean multiQueue) {
         final int maxRetries = 30;
         boolean canWrite = this.defaultMessageStore.getRunningFlags().isCQWriteable();
@@ -475,6 +533,15 @@ public class ConsumeQueue {
         }
     }
 
+    /**
+     *
+     * @param offset 偏移量
+     * @param size 文件大小
+     * @param tagsCode 消息标签
+     * @param cqOffset consumeQueue里面的偏移量
+     * @return
+     */
+    @ImportantZone(desc = "消息投递到consumeQueue")
     private boolean putMessagePositionInfo(final long offset, final int size, final long tagsCode,
         final long cqOffset) {
 
@@ -489,8 +556,10 @@ public class ConsumeQueue {
         this.byteBufferIndex.putInt(size);
         this.byteBufferIndex.putLong(tagsCode);
 
+        // 预计的一个逻辑上的偏移量
         final long expectLogicOffset = cqOffset * CQ_STORE_UNIT_SIZE;
 
+        // 获取最后的mappedFIle
         MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile(expectLogicOffset);
         if (mappedFile != null) {
 

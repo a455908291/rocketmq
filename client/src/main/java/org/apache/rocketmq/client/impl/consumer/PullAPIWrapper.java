@@ -36,6 +36,7 @@ import org.apache.rocketmq.client.impl.factory.MQClientInstance;
 import org.apache.rocketmq.client.log.ClientLogger;
 import org.apache.rocketmq.common.MQVersion;
 import org.apache.rocketmq.common.MixAll;
+import org.apache.rocketmq.common.annotation.ImportantZone;
 import org.apache.rocketmq.common.filter.ExpressionType;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.common.message.MessageAccessor;
@@ -140,6 +141,27 @@ public class PullAPIWrapper {
         }
     }
 
+    /**
+     * 拉取消息
+     * @param mq 拉取消息的队列
+     * @param subExpression 子表达式
+     * @param expressionType 表达式类型
+     * @param subVersion 子版本号
+     * @param offset 拉取偏移量
+     * @param maxNums 最大数量
+     * @param sysFlag 版本号
+     * @param commitOffset 本次已经处理完毕的数据
+     * @param brokerSuspendMaxTimeMillis broker挂起最大时间戳
+     * @param timeoutMillis 超时时间
+     * @param communicationMode 通信模式
+     * @param pullCallback 回调
+     * @return
+     * @throws MQClientException
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
+    @ImportantZone(desc = "consumer 拉取消息")
     public PullResult pullKernelImpl(
         final MessageQueue mq,
         final String subExpression,
@@ -154,9 +176,11 @@ public class PullAPIWrapper {
         final CommunicationMode communicationMode,
         final PullCallback pullCallback
     ) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
+        // 根据mq查询所在的broker， 重新计算从那个节点拉取
         FindBrokerResult findBrokerResult =
             this.mQClientFactory.findBrokerAddressInSubscribe(mq.getBrokerName(),
                 this.recalculatePullFromWhichNode(mq), false);
+        // 没找到从nameSrv更新后重新查找
         if (null == findBrokerResult) {
             this.mQClientFactory.updateTopicRouteInfoFromNameServer(mq.getTopic());
             findBrokerResult =

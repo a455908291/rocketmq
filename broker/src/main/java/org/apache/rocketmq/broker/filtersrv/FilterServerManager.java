@@ -39,10 +39,12 @@ public class FilterServerManager {
 
     public static final long FILTER_SERVER_MAX_IDLE_TIME_MILLS = 30000;
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
+    // 网络连接与过滤服务器的映射关系
     private final ConcurrentMap<Channel, FilterServerInfo> filterServerTable =
         new ConcurrentHashMap<Channel, FilterServerInfo>(16);
     private final BrokerController brokerController;
 
+    // 线程池组件
     private ScheduledExecutorService scheduledExecutorService = Executors
         .newSingleThreadScheduledExecutor(new ThreadFactoryImpl("FilterServerManagerScheduledThread"));
 
@@ -65,10 +67,13 @@ public class FilterServerManager {
     }
 
     public void createFilterServer() {
+        // 根据配置找到过滤服务器数量， 减去实际过滤服务器数量， 差值就是要创建的数量
         int more =
             this.brokerController.getBrokerConfig().getFilterServerNums() - this.filterServerTable.size();
+        // 构建启动命令
         String cmd = this.buildStartCommand();
         for (int i = 0; i < more; i++) {
+            // 调用shell命令 拉起来filter server
             FilterServerUtil.callShell(cmd, log);
         }
     }
@@ -98,6 +103,11 @@ public class FilterServerManager {
         this.scheduledExecutorService.shutdown();
     }
 
+    /**
+     * 当filter启动后会向broker发起注册
+     * @param channel
+     * @param filterServerAddr
+     */
     public void registerFilterServer(final Channel channel, final String filterServerAddr) {
         FilterServerInfo filterServerInfo = this.filterServerTable.get(channel);
         if (filterServerInfo != null) {
@@ -111,6 +121,9 @@ public class FilterServerManager {
         }
     }
 
+    /**
+     * 扫描失活filter server
+     */
     public void scanNotActiveChannel() {
 
         Iterator<Entry<Channel, FilterServerInfo>> it = this.filterServerTable.entrySet().iterator();
@@ -126,6 +139,11 @@ public class FilterServerManager {
         }
     }
 
+    /**
+     * 处理channel关闭事件
+     * @param remoteAddr
+     * @param channel
+     */
     public void doChannelCloseEvent(final String remoteAddr, final Channel channel) {
         FilterServerInfo old = this.filterServerTable.remove(channel);
         if (old != null) {

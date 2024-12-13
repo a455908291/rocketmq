@@ -30,6 +30,7 @@ import java.util.List;
 /**
  * Extend of consume queue, to store something not important,
  * such as message store time, filter bit map and etc.
+ * 消费队列的扩展队列
  * <p/>
  * <li>1. This class is used only by {@link ConsumeQueue}</li>
  * <li>2. And is week reliable.</li>
@@ -39,12 +40,29 @@ import java.util.List;
 public class ConsumeQueueExt {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
+    /**
+     * mappedFIle队列
+     */
     private final MappedFileQueue mappedFileQueue;
+    /**
+     * topic
+     */
     private final String topic;
+    /**
+     * 队列id
+     */
     private final int queueId;
-
+    /**
+     * 存储路径
+     */
     private final String storePath;
+    /**
+     * mappedFile 大小
+     */
     private final int mappedFileSize;
+    /**
+     * 临时容器
+     */
     private ByteBuffer tempContainer;
 
     public static final int END_BLANK_DATA_LENGTH = 4;
@@ -80,9 +98,12 @@ public class ConsumeQueueExt {
             + File.separator + topic
             + File.separator + queueId;
 
+        // 消费队列封装
+        // commitLog是有多个mappedFIle， consumeQueue也是有多个mappedFile
         this.mappedFileQueue = new MappedFileQueue(queueDir, mappedFileSize, null);
 
         if (bitMapLength > 0) {
+            // 分配临时容器缓冲区
             this.tempContainer = ByteBuffer.allocate(
                 bitMapLength / Byte.SIZE
             );

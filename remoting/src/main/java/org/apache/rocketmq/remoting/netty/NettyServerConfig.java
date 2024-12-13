@@ -17,19 +17,37 @@
 package org.apache.rocketmq.remoting.netty;
 
 public class NettyServerConfig implements Cloneable {
+    /**
+     * 监听端口
+     */
     private int listenPort = 8888;
+    /**
+     * worker 线程数量
+     */
     private int serverWorkerThreads = 8;
+    /**
+     * 回调线程池的线程数量
+     */
     private int serverCallbackExecutorThreads = 0;
+    /**
+     * 连接监听线程数量
+     * netty网络服务器的io线程数量， 默认3个线程， 所有建立好的连接都会分配给3个线程，每个线程多路复用监听一批连接的读写io
+     */
     private int serverSelectorThreads = 3;
     private int serverOnewaySemaphoreValue = 256;
     private int serverAsyncSemaphoreValue = 64;
+    /**
+     * 网络连接最大空闲时间， 超过这个时间没有进行通信则断开连接
+     */
     private int serverChannelMaxIdleTimeSeconds = 120;
-
+    /**
+     * 网络连接通信收发数据的缓冲区大小
+     */
     private int serverSocketSndBufSize = NettySystemConfig.socketSndbufSize;
     private int serverSocketRcvBufSize = NettySystemConfig.socketRcvbufSize;
-    private int writeBufferHighWaterMark = NettySystemConfig.writeBufferHighWaterMark;
-    private int writeBufferLowWaterMark = NettySystemConfig.writeBufferLowWaterMark;
-    private int serverSocketBacklog = NettySystemConfig.socketBacklog;
+    /**
+     * 是否开启基于内存池的内存分配策略
+     */
     private boolean serverPooledByteBufAllocatorEnable = true;
 
     /**
@@ -113,14 +131,6 @@ public class NettyServerConfig implements Cloneable {
         this.serverSocketRcvBufSize = serverSocketRcvBufSize;
     }
 
-    public int getServerSocketBacklog() {
-        return serverSocketBacklog;
-    }
-
-    public void setServerSocketBacklog(int serverSocketBacklog) {
-        this.serverSocketBacklog = serverSocketBacklog;
-    }
-
     public boolean isServerPooledByteBufAllocatorEnable() {
         return serverPooledByteBufAllocatorEnable;
     }
@@ -140,21 +150,5 @@ public class NettyServerConfig implements Cloneable {
     @Override
     public Object clone() throws CloneNotSupportedException {
         return (NettyServerConfig) super.clone();
-    }
-
-    public int getWriteBufferLowWaterMark() {
-        return writeBufferLowWaterMark;
-    }
-
-    public void setWriteBufferLowWaterMark(int writeBufferLowWaterMark) {
-        this.writeBufferLowWaterMark = writeBufferLowWaterMark;
-    }
-
-    public int getWriteBufferHighWaterMark() {
-        return writeBufferHighWaterMark;
-    }
-
-    public void setWriteBufferHighWaterMark(int writeBufferHighWaterMark) {
-        this.writeBufferHighWaterMark = writeBufferHighWaterMark;
     }
 }

@@ -29,15 +29,25 @@ import org.apache.rocketmq.remoting.common.RemotingUtil;
 import org.apache.rocketmq.remoting.netty.NettySystemConfig;
 import org.apache.rocketmq.store.SelectMappedBufferResult;
 
+/**
+ * 高可用链接
+ */
 public class HAConnection {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
+    // 高可用服务组件
     private final HAService haService;
+    // nio网络连接
     private final SocketChannel socketChannel;
+    // 客户端地址
     private final String clientAddr;
+    // 写socket
     private WriteSocketService writeSocketService;
+    // 读socket
     private ReadSocketService readSocketService;
 
+    // 从节点请求获取的偏移量
     private volatile long slaveRequestOffset = -1;
+    // 从节点同步数据后ack的偏移量
     private volatile long slaveAckOffset = -1;
 
     public HAConnection(final HAService haService, final SocketChannel socketChannel) throws IOException {
@@ -84,11 +94,17 @@ public class HAConnection {
     }
 
     class ReadSocketService extends ServiceThread {
+        // 读数据最大缓冲区
         private static final int READ_MAX_BUFFER_SIZE = 1024 * 1024;
+        // 多路复用监听组件
         private final Selector selector;
+        // nio 网络连接
         private final SocketChannel socketChannel;
+        // 读数据缓冲区
         private final ByteBuffer byteBufferRead = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
+        // 处理消息的位置
         private int processPosition = 0;
+        // 最近读取数据时间戳
         private volatile long lastReadTimestamp = System.currentTimeMillis();
 
         public ReadSocketService(final SocketChannel socketChannel) throws IOException {
@@ -153,6 +169,7 @@ public class HAConnection {
         private boolean processReadEvent() {
             int readSizeZeroTimes = 0;
 
+            // 如果说读取数据缓冲区已经没有空间了， 此时做一个flip
             if (!this.byteBufferRead.hasRemaining()) {
                 this.byteBufferRead.flip();
                 this.processPosition = 0;
@@ -160,15 +177,20 @@ public class HAConnection {
 
             while (this.byteBufferRead.hasRemaining()) {
                 try {
+                    // 读取最大1M
                     int readSize = this.socketChannel.read(this.byteBufferRead);
                     if (readSize > 0) {
                         readSizeZeroTimes = 0;
+                        // 更新时间戳
                         this.lastReadTimestamp = HAConnection.this.haService.getDefaultMessageStore().getSystemClock().now();
+                        // 至少读到了8个字节
                         if ((this.byteBufferRead.position() - this.processPosition) >= 8) {
+                            // 拿到完整数据的最后位置
                             int pos = this.byteBufferRead.position() - (this.byteBufferRead.position() % 8);
+                            // 读取最后8个字节（即ack）
                             long readOffset = this.byteBufferRead.getLong(pos - 8);
                             this.processPosition = pos;
-
+                            // 设置ack偏移量
                             HAConnection.this.slaveAckOffset = readOffset;
                             if (HAConnection.this.slaveRequestOffset < 0) {
                                 HAConnection.this.slaveRequestOffset = readOffset;
@@ -180,7 +202,7 @@ public class HAConnection {
                                         HAConnection.this.haService.getDefaultMessageStore().getMaxPhyOffset());
                                 return false;
                             }
-
+                            // 通知HAService传输数据给从节点
                             HAConnection.this.haService.notifyTransferSome(HAConnection.this.slaveAckOffset);
                         }
                     } else if (readSize == 0) {
@@ -205,11 +227,17 @@ public class HAConnection {
         private final Selector selector;
         private final SocketChannel socketChannel;
 
+        // 写数据头大小
         private final int headerSize = 8 + 4;
+        // 写数据头缓冲区
         private final ByteBuffer byteBufferHeader = ByteBuffer.allocate(headerSize);
+        // 从哪个位置开始传输
         private long nextTransferFromWhere = -1;
+        // 内存映射区域查询数据结果
         private SelectMappedBufferResult selectMappedBufferResult;
+        // 最后一次写数据是否完成
         private boolean lastWriteOver = true;
+        // 最后一次写数据时间戳
         private long lastWriteTimestamp = System.currentTimeMillis();
 
         public WriteSocketService(final SocketChannel socketChannel) throws IOException {
@@ -234,6 +262,7 @@ public class HAConnection {
 
                     if (-1 == this.nextTransferFromWhere) {
                         if (0 == HAConnection.this.slaveRequestOffset) {
+                            // 获取到commitLog最大的偏移量
                             long masterOffset = HAConnection.this.haService.getDefaultMessageStore().getCommitLog().getMaxOffset();
                             masterOffset =
                                 masterOffset
@@ -254,10 +283,10 @@ public class HAConnection {
                     }
 
                     if (this.lastWriteOver) {
-
+                        // 上一次写数据时间间隔
                         long interval =
                             HAConnection.this.haService.getDefaultMessageStore().getSystemClock().now() - this.lastWriteTimestamp;
-
+                        // 如果超过ha心跳间隔
                         if (interval > HAConnection.this.haService.getDefaultMessageStore().getMessageStoreConfig()
                             .getHaSendHeartbeatInterval()) {
 
@@ -311,6 +340,7 @@ public class HAConnection {
                 }
             }
 
+            // 数据清理（进程关闭）
             HAConnection.this.haService.getWaitNotifyObject().removeFromWaitingThreadTable();
 
             if (this.selectMappedBufferResult != null) {
@@ -342,9 +372,11 @@ public class HAConnection {
             int writeSizeZeroTimes = 0;
             // Write Header
             while (this.byteBufferHeader.hasRemaining()) {
+                // 通过nio把请求头发送过去
                 int writeSize = this.socketChannel.write(this.byteBufferHeader);
                 if (writeSize > 0) {
                     writeSizeZeroTimes = 0;
+                    // 时间进行更新
                     this.lastWriteTimestamp = HAConnection.this.haService.getDefaultMessageStore().getSystemClock().now();
                 } else if (writeSize == 0) {
                     if (++writeSizeZeroTimes >= 3) {
@@ -363,7 +395,9 @@ public class HAConnection {
 
             // Write Body
             if (!this.byteBufferHeader.hasRemaining()) {
+                // commitLog内存区域查询出来的数据片段
                 while (this.selectMappedBufferResult.getByteBuffer().hasRemaining()) {
+                    // 把commitLog写入到nio里面
                     int writeSize = this.socketChannel.write(this.selectMappedBufferResult.getByteBuffer());
                     if (writeSize > 0) {
                         writeSizeZeroTimes = 0;
